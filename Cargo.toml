@@ -1,0 +1,17 @@
+[package]
+name = "ai-workspace"
+version = "0.9.0"
+edition = "2021"
+[[bin]]
+name = "KAGARI"
+path = "src/main.rs"
+[profile.release]
+strip = true
+lto = true
+[lib]
+name="kagari_core"
+path="src/core.rs"
+crate-type=["cdylib"]
+test=false
+doctest=false
+

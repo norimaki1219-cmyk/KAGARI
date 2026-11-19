@@ -1,0 +1,9 @@
+/target/
+*.exe
+*.dll
+*.zip
+/kaname.ico
+.env
+.env.*
+workspace.tsv
+/history/
