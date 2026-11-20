@@ -72,6 +72,7 @@ pub extern "system" fn kagari_action(h: H, id: i32, index: i32, input: Ptr) -> P
  705=>{set(h,123,&text);run(h,&mut a,122,0)?;},
  706=>{a.unassigned=index==1;a.department_filter=text;a.metric=0;a.task=a.indices().first().copied();refresh(h,&a);render(h,&a);},
  707=>{a.agent_filter=index.clamp(0,2) as usize;a.task=a.indices().first().copied();refresh(h,&a);render(h,&a);},
+ 710=>{let mut next=a.clone();next.panes &= 2;next.save()?;*a=next;native::apply_layout(h,a.panes);panel(h,&a);attach_state(h,&a);},
  709=>{a.query.clear();set(h,182,"");run(h,&mut a,128,0)?;},
  708=>{register(h,&mut a,&text)?;},
  103|113|115|116|119|121|127|150..=153|156|159|160|175..=177|181|190|192|194..=200=>run(h,&mut a,id,0)?,

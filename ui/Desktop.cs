@@ -42,6 +42,17 @@ internal sealed class Desktop {
  int[] cmds={185,186,190,121,115,116};
  for(int i=0;i<cmds.Length;i++){var b=Action(glyphs[i],cmds[i],hints[i]);b.FontFamily=new FontFamily("Segoe MDL2 Assets");b.FontSize=18;b.Width=40;b.Height=41;b.Foreground=Brushes.White;b.Background=Color("#294653");At<StackPanel>("Rail").Children.Add(b);}
  string[] tabs={"仕様書","作業ログ","結果"};for(int i=0;i<3;i++)At<WrapPanel>("Tabs").Children.Add(Action(tabs[i],175+i,tabs[i]));
+ var preset=Action("",710,"縦3列　1:1:2（標準）");
+ preset.Width=40;preset.Height=41;preset.Padding=new Thickness(7);preset.Background=Color("#294653");
+ var columns=new Grid{Width=23,Height=16};
+ for(int i=0;i<3;i++){
+  columns.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(i==2?2:1,GridUnitType.Star)});
+  var segment=new Border{Background=Color(i==2?"#AEDEDD":"#DFE9ED"),Margin=new Thickness(1,0,0,0),CornerRadius=new CornerRadius(1)};
+  Grid.SetColumn(segment,i);columns.Children.Add(segment);
+ }
+ preset.Content=columns;
+ At<StackPanel>("Rail").Children.Add(new Separator{Margin=new Thickness(4,6,4,6)});
+ At<StackPanel>("Rail").Children.Add(preset);
  window.AddHandler(ButtonBase.ClickEvent,new RoutedEventHandler(Click));
  window.AddHandler(MenuItem.ClickEvent,new RoutedEventHandler(Click));
  At<TextBox>("Search").TextChanged+=(s,e)=>{if(!drawing)Run(703,0,At<TextBox>("Search").Text);};
@@ -113,16 +124,16 @@ internal sealed class Desktop {
  int length;IntPtr rtf=kagari_rtf(core,out length);var box=At<RichTextBox>("Preview");if(length>0){byte[] bytes=new byte[length];Marshal.Copy(rtf,bytes,0,length);using(var ms=new MemoryStream(bytes)){try{new TextRange(box.Document.ContentStart,box.Document.ContentEnd).Load(ms,DataFormats.Rtf);}catch(ArgumentException){box.Document=new FlowDocument(new Paragraph(new Run(pv.Value)));}}}
  }
  k=0;foreach(Button b in At<WrapPanel>("Tabs").Children){b.Background=Color(k++==(int)data.Attribute("doc")?"#D1E8E7":"#EEF2F4");}
- SetLayout((int)data.Attribute("panes"));
+ SetLayout((int)data.Attribute("panes"),action==710 || action==200);
  }
  class Node{internal string Path;internal int Index;internal bool Loaded;}
  TreeViewItem TreeNode(string path,int index,bool dir){var item=new TreeViewItem{Header=(dir?"▸  ":"▤  ")+(Path.GetFileName(path.TrimEnd('\\'))==""?path:Path.GetFileName(path.TrimEnd('\\'))),ToolTip=path,Tag=new Node{Path=path,Index=index}};if(dir)item.Items.Add("");return item;}
  void Expand(object s,RoutedEventArgs e){var item=e.OriginalSource as TreeViewItem;if(item==null)return;var n=(Node)item.Tag;if(n.Loaded)return;n.Loaded=true;item.Items.Clear();try{foreach(var d in Directory.EnumerateDirectories(n.Path).OrderBy(p=>p))item.Items.Add(TreeNode(d,n.Index,true));foreach(var f in Directory.EnumerateFiles(n.Path).OrderBy(p=>p))item.Items.Add(TreeNode(f,n.Index,false));}catch(IOException){}catch(UnauthorizedAccessException){}}
  static Visibility Visible(bool b){return b?Visibility.Visible:Visibility.Collapsed;}
- void SetLayout(int f){if(flags==f)return;flags=f;bool side=(f&1)==0,q=(f&4)==0,d=(f&8)==0,both=q&&d,vert=both&&(f&16)!=0;
- var ws=At<Grid>("Workspace");ws.ColumnDefinitions[0].Width=new GridLength(side?205:0);ws.ColumnDefinitions[1].Width=new GridLength(side?6:0);At<Border>("Side").Visibility=Visible(side);At<GridSplitter>("SideGrip").Visibility=Visible(side);
+ void SetLayout(int f,bool reset){if(flags==f && !reset)return;flags=f;bool side=(f&1)==0,q=(f&4)==0,d=(f&8)==0,both=q&&d,vert=both&&(f&16)!=0;
+ var ws=At<Grid>("Workspace");ws.ColumnDefinitions[0].Width=side?new GridLength(1,GridUnitType.Star):new GridLength(0);ws.ColumnDefinitions[2].Width=new GridLength(both && !vert?3:2,GridUnitType.Star);ws.ColumnDefinitions[1].Width=new GridLength(side?6:0);At<Border>("Side").Visibility=Visible(side);At<GridSplitter>("SideGrip").Visibility=Visible(side);
  At<Border>("Kpi").Visibility=Visible((f&2)==0);var panes=At<Grid>("Panes");var docs=At<Border>("Docs");var grip=At<GridSplitter>("Grip");At<Border>("Queue").Visibility=Visible(q);docs.Visibility=Visible(d);grip.Visibility=Visible(both);
- var zero=new GridLength(0);var star=new GridLength(1,GridUnitType.Star);panes.ColumnDefinitions[0].Width=star;panes.RowDefinitions[0].Height=star;panes.ColumnDefinitions[1].Width=both&&!vert?new GridLength(6):zero;panes.ColumnDefinitions[2].Width=both&&!vert?star:zero;panes.RowDefinitions[1].Height=vert?new GridLength(6):zero;panes.RowDefinitions[2].Height=vert?star:zero;
+ var zero=new GridLength(0);var star=new GridLength(1,GridUnitType.Star);panes.ColumnDefinitions[0].Width=star;panes.RowDefinitions[0].Height=star;panes.ColumnDefinitions[1].Width=both&&!vert?new GridLength(6):zero;panes.ColumnDefinitions[2].Width=both&&!vert?new GridLength(2,GridUnitType.Star):zero;panes.RowDefinitions[1].Height=vert?new GridLength(6):zero;panes.RowDefinitions[2].Height=vert?star:zero;
  Grid.SetColumn(docs,both&&!vert?2:0);Grid.SetRow(docs,vert?2:0);Grid.SetColumn(grip,both&&!vert?1:0);Grid.SetRow(grip,vert?1:0);grip.ResizeDirection=vert?GridResizeDirection.Rows:GridResizeDirection.Columns;
  }
  [STAThread] static int Main(string[] args){using(var mutex=new Mutex(false,@"Local\RustAIWorkspace_v1")){try{if(!mutex.WaitOne(0)){MessageBox.Show("KAGARI は既に起動中です。");return 1;}}catch(AbandonedMutexException){}try{var app=new Application();var ui=new Desktop();if(args.Contains("--smoke")){ui.window.Loaded+=(s,e)=>{ui.window.UpdateLayout();ui.Run(199);if(ui.At<GridSplitter>("Grip").ResizeDirection!=GridResizeDirection.Rows)throw new Exception("上下分割");
@@ -132,5 +143,12 @@ internal sealed class Desktop {
  ui.Run(703,0,"__kagari_no_match__");
  if(ui.At<StackPanel>("EmptyPanel").Visibility!=Visibility.Visible || ui.At<Button>("Advance").IsEnabled)throw new Exception("空の検索結果");
  ui.Run(709);if(ui.At<TextBox>("Search").Text!="")throw new Exception("検索解除");
+ ui.Run(199);ui.Run(197);ui.Run(194);ui.Run(710);
+ var ws=ui.At<Grid>("Workspace");var panes=ui.At<Grid>("Panes");
+ panes.ColumnDefinitions[0].Width=new GridLength(180);
+ var rail=ui.At<StackPanel>("Rail");rail.Children.OfType<Button>().Single(b=>Convert.ToInt32(b.Tag)==710).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+ ui.window.UpdateLayout();
+ double left=ws.ColumnDefinitions[0].ActualWidth,queue=panes.ColumnDefinitions[0].ActualWidth,docs=panes.ColumnDefinitions[2].ActualWidth;
+ if(left<=0 || Math.Abs(left-queue)>3 || Math.Abs(2*queue-docs)>3 || ui.At<Border>("Side").Visibility!=Visibility.Visible)throw new Exception("縦3列プリセット");
  ui.window.Close();};}app.Run(ui.window);return 0;}catch(Exception e){if(args.Contains("--smoke"))Console.Error.WriteLine(e);else MessageBox.Show(e.Message,"KAGARI");return 1;}finally{mutex.ReleaseMutex();}}}
 }
