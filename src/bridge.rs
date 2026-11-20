@@ -72,11 +72,12 @@ pub extern "system" fn kagari_action(h: H, id: i32, index: i32, input: Ptr) -> P
  705=>{set(h,123,&text);run(h,&mut a,122,0)?;},
  706=>{a.unassigned=index==1;a.department_filter=text;a.metric=0;a.task=a.indices().first().copied();refresh(h,&a);render(h,&a);},
  707=>{a.agent_filter=index.clamp(0,2) as usize;a.task=a.indices().first().copied();refresh(h,&a);render(h,&a);},
+ 709=>{a.query.clear();set(h,182,"");run(h,&mut a,128,0)?;},
  708=>{register(h,&mut a,&text)?;},
  103|113|115|116|119|121|127|150..=153|156|159|160|175..=177|181|190|192|194..=200=>run(h,&mut a,id,0)?,
  _=>return Err("操作を確認してください".into())
  }
- let mut out=format!("<workspace project=\"{}\" task=\"{}\" panes=\"{}\" doc=\"{}\" metric=\"{}\" agent=\"{}\" filter=\"{}\" query=\"{}\">",a.project,a.task.map(|i|i as i64).unwrap_or(-1),a.panes,a.doc,a.metric,a.agent_filter,xml(&a.department_filter),xml(&a.query));
+ let mut out=format!("<workspace project=\"{}\" task=\"{}\" panes=\"{}\" doc=\"{}\" metric=\"{}\" agent=\"{}\" filter=\"{}\" unassigned=\"{}\" query=\"{}\">",a.project,a.task.map(|i|i as i64).unwrap_or(-1),a.panes,a.doc,a.metric,a.agent_filter,xml(&a.department_filter),a.unassigned,xml(&a.query));
  for p in &a.projects{let _=write!(out,"<project>{}</project>",xml(p));}
  let mut depts=std::collections::BTreeMap::new();
  for t in &a.tasks{if Some(&t.project)==a.projects.get(a.project)&&(a.agent_filter==0||a.agent_filter==t.agent+1){let counts=depts.entry(&t.dept).or_insert([0;4]);counts[t.status]+=1;}}

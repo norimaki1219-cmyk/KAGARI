@@ -32,6 +32,7 @@ internal sealed class Desktop {
  static string Value(XElement row,string field){return (string)row.Attribute(field)??"";}
  static string PathName(string p){return p.StartsWith(@"\\?\UNC\")?@"\\"+p.Substring(8):p.StartsWith(@"\\?\")?p.Substring(4):p;}
  static Button Action(string label,int id,string hint){var b=new Button{Content=label,Tag=id,ToolTip=hint};AutomationProperties.SetName(b,hint);return b;}
+ string previewText, previewPath;
  internal Desktop(){
  using(var fs=File.OpenRead(Path.Combine(folder,"ui","Main.xaml"))){window=(Window)XamlReader.Load(fs);}
  window.Icon=At<Image>("Logo").Source=Icon("kagari.ico");
@@ -46,6 +47,10 @@ internal sealed class Desktop {
  At<TextBox>("Search").TextChanged+=(s,e)=>{if(!drawing)Run(703,0,At<TextBox>("Search").Text);};
  AutomationProperties.SetName(At<TextBox>("Search"),"タスク検索");
  var agent=At<ComboBox>("Agent");agent.ItemsSource=new[]{"全担当","Codex","Claude Code"};agent.SelectionChanged+=(s,e)=>{if(!drawing)Run(707,agent.SelectedIndex,"");};
+ window.PreviewKeyDown+=(s,e)=>{
+  if(e.Key==Key.F && Keyboard.Modifiers==ModifierKeys.Control){At<TextBox>("Search").Focus();At<TextBox>("Search").SelectAll();e.Handled=true;}
+  if(e.Key==Key.Escape && At<TextBox>("Search").IsKeyboardFocused){At<TextBox>("Search").Clear();e.Handled=true;}
+ };
  var tasks=At<ListBox>("Tasks");tasks.SelectionChanged+=(s,e)=>{var row=tasks.SelectedItem as ListBoxItem;if(!drawing && row!=null)Run(702,(int)row.Tag,"");};
  tasks.MouseDoubleClick+=(s,e)=>{if(tasks.SelectedItem!=null)Run(160);};
  var tree=At<TreeView>("Tree");tree.AddHandler(TreeViewItem.ExpandedEvent,new RoutedEventHandler(Expand));tree.SelectedItemChanged+=(s,e)=>{var item=e.NewValue as TreeViewItem;if(drawing||item==null)return;var n=(Node)item.Tag;if(n.Index!=(int)data.Attribute("project"))Run(701,n.Index,"");if(File.Exists(n.Path) && new[]{".md",".markdown"}.Contains(Path.GetExtension(n.Path).ToLowerInvariant())){var root=PathName(data.Elements("project").ElementAt(n.Index).Value).TrimEnd('\\')+"\\";if(n.Path.StartsWith(root,StringComparison.OrdinalIgnoreCase))Run(704,0,n.Path.Substring(root.Length));}};
@@ -66,11 +71,11 @@ internal sealed class Desktop {
  void Run(int id,int index=0,string text=""){
  if(core==IntPtr.Zero)return;
  bool modal=new[]{103,113,115,127,160,190,192}.Contains(id);if(modal)window.IsEnabled=false;
- try{var ptr=kagari_action(core,id,index,text);var result=XElement.Parse(Marshal.PtrToStringUni(ptr));if(result.Name=="error"){MessageBox.Show(window,result.Value,"KAGARI");return;}data=result;drawing=true;Paint();}
+ try{var ptr=kagari_action(core,id,index,text);var result=XElement.Parse(Marshal.PtrToStringUni(ptr));if(result.Name=="error"){MessageBox.Show(window,result.Value,"KAGARI");return;}data=result;drawing=true;Paint(id);}
  finally{drawing=false;if(modal){window.IsEnabled=true;window.Activate();}}
  }
  void LayoutMenu(){var m=new ContextMenu();string[] names={"エクスプローラー","部署別の進捗","作業キュー","タスク資料","左右に分割","上下に分割","標準に戻す"};for(int i=0;i<7;i++){if(i==4||i==6)m.Items.Add(new Separator());int id=194+i;var item=new MenuItem{Header=names[i],IsCheckable=i<6,IsChecked=i<4?(flags&(1<<i))==0:i==4?(flags&16)==0:i==5&&(flags&16)!=0};item.Click+=(s,e)=>Run(id);m.Items.Add(item);}m.PlacementTarget=At<Button>("Layout");m.Placement=PlacementMode.Bottom;m.IsOpen=true;}
- void Paint(){
+ void Paint(int action){
  var projects=data.Elements("project").Select(p=>PathName(p.Value)).ToArray();int project=(int)data.Attribute("project");
  var search=At<TextBox>("Search");string query=Value(data,"query");if(!String.Equals(search.Text.Trim(),query,StringComparison.OrdinalIgnoreCase))search.Text=query;
  At<ComboBox>("Agent").SelectedIndex=(int)data.Attribute("agent");string key=String.Join("|",projects);
@@ -82,11 +87,31 @@ internal sealed class Desktop {
  foreach(var d in data.Elements("dept")){string name=Value(d,"name");var values=new[]{"a","b","c","d"}.Select(f=>(int)d.Attribute(f)).ToArray();var line=new DockPanel{Margin=new Thickness(0,2,0,2),Cursor=Cursors.Hand};var caption=Label(name==""?"部署未設定":name,12);caption.Width=88;DockPanel.SetDock(caption,Dock.Left);line.Children.Add(caption);var total=Label(values.Sum().ToString(),12);total.Width=32;total.TextAlignment=TextAlignment.Right;DockPanel.SetDock(total,Dock.Right);line.Children.Add(total);var bars=new Grid{Height=9,VerticalAlignment=VerticalAlignment.Center};for(int i=0;i<4;i++){bars.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(values[i],GridUnitType.Star)});var seg=new Border{Background=Color(colors[i]),CornerRadius=new CornerRadius(2)};Grid.SetColumn(seg,i);bars.Children.Add(seg);}line.Children.Add(bars);line.ToolTip=String.Join("　",values.Select((v,i)=>states[i]+" "+v));line.MouseLeftButtonUp+=(s,e)=>Run(706,name==""?1:0,name);chart.Children.Add(line);}
  if(chart.Children.Count==0)chart.Children.Add(Label("タスクを登録すると、部署ごとの進捗を表示します",12));
  else{var legend=new WrapPanel();for(int i=0;i<4;i++){var l=Label("● "+states[i],11);l.Foreground=Color(colors[i]);l.Margin=new Thickness(0,3,12,0);legend.Children.Add(l);}var clear=new Button{Content="全部署",Padding=new Thickness(5,1,5,1)};clear.Click+=(s,e)=>Run(706);legend.Children.Add(clear);chart.Children.Add(legend);}
- var tasks=At<ListBox>("Tasks");tasks.Items.Clear();int selected=(int)data.Attribute("task");
- foreach(var t in data.Elements("task")){int i=(int)t.Attribute("id"),st=(int)t.Attribute("state");var row=new ListBoxItem{Tag=i,Padding=new Thickness(5,7,5,7)};var line=new DockPanel();var img=new Image{Source=icons[(int)t.Attribute("agent")],Width=19,Height=19,Margin=new Thickness(6,0,3,0),ToolTip=(int)t.Attribute("agent")==0?"Codex":"Claude Code"};DockPanel.SetDock(img,Dock.Right);line.Children.Add(img);var stack=new StackPanel();var title=Label(((bool)t.Attribute("pin")?"★  ":"")+Value(t,"title"),14);title.FontWeight=FontWeights.SemiBold;stack.Children.Add(title);var meta=Label("● "+states[st]+"   "+Value(t,"dept")+"   "+Value(t,"due")+"   "+Value(t,"reason"),11);meta.Foreground=Color(colors[st]);stack.Children.Add(meta);line.Children.Add(stack);row.Content=line;AutomationProperties.SetName(row,Value(t,"title"));tasks.Items.Add(row);if(i==selected)row.IsSelected=true;}
- At<TextBlock>("Empty").Visibility=tasks.Items.Count==0?Visibility.Visible:Visibility.Hidden;At<Button>("Ask").IsEnabled=selected>=0;
+ var tasks=At<ListBox>("Tasks");int selected=(int)data.Attribute("task");
+ var focused=tasks.SelectedItem as ListBoxItem;
+ if(action!=702 || focused==null || (int)focused.Tag!=selected){
+ tasks.Items.Clear();
+ foreach(var t in data.Elements("task")){int i=(int)t.Attribute("id"),st=(int)t.Attribute("state");var row=new ListBoxItem{Tag=i,Padding=new Thickness(5,7,5,7)};var line=new DockPanel();var img=new Image{Source=icons[(int)t.Attribute("agent")],Width=19,Height=19,Margin=new Thickness(6,0,3,0),ToolTip=(int)t.Attribute("agent")==0?"Codex":"Claude Code"};DockPanel.SetDock(img,Dock.Right);line.Children.Add(img);var stack=new StackPanel();var title=Label(((bool)t.Attribute("pin")?"★  ":"")+Value(t,"title"),14);title.FontWeight=FontWeights.SemiBold;stack.Children.Add(title);var metadata=new WrapPanel{Margin=new Thickness(0,4,0,0)};
+ var state=Label(states[st],11);state.Foreground=Color("#243841");
+ metadata.Children.Add(new Border{Child=state,Background=Color(new[]{"#E6EBEF","#D6ECF3","#FBE7C9","#D8EDE2"}[st]),CornerRadius=new CornerRadius(4),Padding=new Thickness(6,1,6,1),Margin=new Thickness(0,0,6,0)});
+ var details=new[]{Value(t,"dept"),Value(t,"due"),Value(t,"reason")}.Where(v=>v!="" && v!=states[st] && v!="通常");
+ metadata.Children.Add(Label(String.Join("　",details),11));stack.Children.Add(metadata);line.Children.Add(stack);row.Content=line;AutomationProperties.SetName(row,Value(t,"title"));tasks.Items.Add(row);if(i==selected)row.IsSelected=true;}
+ }
+ var active=data.Elements("task").FirstOrDefault(t=>(int)t.Attribute("id")==selected);
+ bool filtered=query.Length>0 || Value(data,"filter")!="" || (bool)data.Attribute("unassigned") || (int)data.Attribute("metric")!=0 || (int)data.Attribute("agent")!=0;
+ At<TextBlock>("SearchHint").Visibility=Visible(search.Text.Length==0);
+ At<Button>("ResetFilters").Visibility=Visible(filtered);
+ At<StackPanel>("EmptyPanel").Visibility=Visible(tasks.Items.Count==0);
+ bool noProject=projects.Length==0;
+ At<TextBlock>("Empty").Text=noProject?"作業フォルダーを選んで始めます":filtered?"条件に一致するタスクがありません":"このプロジェクトにタスクはまだありません";
+ var next=At<Button>("EmptyAction");next.Content=noProject?"フォルダーを選択":filtered?"全件を表示":"最初のタスクを作成";next.Tag=noProject?127:filtered?709:113;
+ foreach(string name in new[]{"Advance","Pin","Ask","Details"})At<Button>(name).IsEnabled=active!=null;
+ At<Button>("Advance").Content=active==null?"作業を開始":new[]{"作業を開始","確認待ちにする","完了にする","作業を再開"}[(int)active.Attribute("state")];
+ At<Button>("Pin").Content=active!=null && (bool)active.Attribute("pin")?"★":"☆";
  var pv=data.Element("preview");At<TextBlock>("FileName").Text=Value(pv,"path");At<Button>("Attach").Visibility=(bool)pv.Attribute("attach")?Visibility.Visible:Visibility.Collapsed;
+ if(action==119 || action==704 || previewText!=pv.Value || previewPath!=Value(pv,"path")){previewText=pv.Value;previewPath=Value(pv,"path");
  int length;IntPtr rtf=kagari_rtf(core,out length);var box=At<RichTextBox>("Preview");if(length>0){byte[] bytes=new byte[length];Marshal.Copy(rtf,bytes,0,length);using(var ms=new MemoryStream(bytes)){try{new TextRange(box.Document.ContentStart,box.Document.ContentEnd).Load(ms,DataFormats.Rtf);}catch(ArgumentException){box.Document=new FlowDocument(new Paragraph(new Run(pv.Value)));}}}
+ }
  k=0;foreach(Button b in At<WrapPanel>("Tabs").Children){b.Background=Color(k++==(int)data.Attribute("doc")?"#D1E8E7":"#EEF2F4");}
  SetLayout((int)data.Attribute("panes"));
  }
@@ -104,5 +129,8 @@ internal sealed class Desktop {
  ui.Run(197);if(ui.At<Border>("Docs").Visibility!=Visibility.Collapsed)throw new Exception("資料非表示");
  ui.Run(200);if(ui.At<GridSplitter>("Grip").ResizeDirection!=GridResizeDirection.Columns)throw new Exception("左右分割");
  if(ui.data.Elements("task").Any()){ui.Run(702,(int)ui.data.Elements("task").First().Attribute("id"),"");if(ui.At<ListBox>("Tasks").SelectedItem==null)throw new Exception("タスク選択");}
+ ui.Run(703,0,"__kagari_no_match__");
+ if(ui.At<StackPanel>("EmptyPanel").Visibility!=Visibility.Visible || ui.At<Button>("Advance").IsEnabled)throw new Exception("空の検索結果");
+ ui.Run(709);if(ui.At<TextBox>("Search").Text!="")throw new Exception("検索解除");
  ui.window.Close();};}app.Run(ui.window);return 0;}catch(Exception e){if(args.Contains("--smoke"))Console.Error.WriteLine(e);else MessageBox.Show(e.Message,"KAGARI");return 1;}finally{mutex.ReleaseMutex();}}}
 }
