@@ -9,12 +9,9 @@ struct Row {
 }
 thread_local! {static ROWS:RefCell<Vec<Row>>=RefCell::default();}
 fn aggregate(a: &App) -> Vec<Row> {
-    let mut groups = BTreeMap::new();
+    let mut groups: BTreeMap<_, _> = a.projects.iter().cloned().map(|p| (p, [0; 4])).collect();
     for t in &a.tasks {
-        if Some(&t.project) == a.projects.get(a.project)
-            && (a.agent_filter == 0 || a.agent_filter == t.agent + 1)
-        {
-            let counts = groups.entry(t.dept.clone()).or_insert([0; 4]);
+        if let Some(counts) = groups.get_mut(&t.project) {
             counts[t.status] += 1;
         }
     }
@@ -24,11 +21,7 @@ fn aggregate(a: &App) -> Vec<Row> {
         .collect()
 }
 fn label(r: &Row) -> &str {
-    if r.name.is_empty() {
-        "部署未設定"
-    } else {
-        &r.name
-    }
+    Path::new(&r.name).file_name().and_then(|s| s.to_str()).unwrap_or(&r.name)
 }
 pub fn update(h: H, a: &App) {
     let rows = aggregate(a);
@@ -55,7 +48,7 @@ pub fn update(h: H, a: &App) {
             r.counts[3]
         );
         msg(h, ID, 0x180, 0, wide(&desc).as_ptr() as _);
-        if a.unassigned && r.name.is_empty() || !r.name.is_empty() && r.name == a.department_filter
+        if a.projects.get(a.project) == Some(&r.name)
         {
             msg(h, ID, 0x186, i, 0);
         }
@@ -143,7 +136,7 @@ pub fn draw(l: isize) {
                 text(
                     d.dc,
                     r,
-                    "　タスクを登録すると部署別に表示します",
+                    "　タスクを登録するとプロジェクト別に表示します",
                     0x70665a,
                     0,
                 )

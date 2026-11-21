@@ -15,7 +15,19 @@ struct Entry {
     title: String,
     date: String,
 }
-fn scan() -> Result<Vec<Entry>> {
+pub(super) fn latest_reply(agent: usize, session: &str) -> Option<Reply> {
+    let shell = PathBuf::from(std::env::var_os("SystemRoot")?).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let output = Command::new(shell)
+        .args(["-NoProfile", "-NonInteractive", "-Command", include_str!("session_reply.ps1")])
+        .env("KAGARI_SESSION", session).env("KAGARI_AGENT", agent.to_string())
+        .creation_flags(0x08000000).output().ok()?;
+    if !output.status.success() {return None;}
+    let raw = String::from_utf8(output.stdout).ok()?;
+    let (stamp, reply) = raw.split_once('\n')?;
+    let (text,previous) = reply.split_once('\0')?;
+    Some(Reply{time:stamp.trim().parse().ok()?,text:text.into(),previous:previous.into()})
+}
+fn scan(project: &str) -> Result<Vec<Entry>> {
     let shell = PathBuf::from(std::env::var_os("SystemRoot").ok_or("Windowsの場所が不明です")?)
         .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
     let out = Command::new(shell)
@@ -25,6 +37,7 @@ fn scan() -> Result<Vec<Entry>> {
             "-Command",
             include_str!("session_list.ps1"),
         ])
+        .env("KAGARI_HISTORY_PROJECT", project)
         .creation_flags(0x08000000)
         .output()
         .map_err(|e| e.to_string())?;
@@ -55,11 +68,17 @@ fn scan() -> Result<Vec<Entry>> {
 struct Picker {
     entries: Vec<Entry>,
     rx: mpsc::Receiver<Result<Vec<Entry>>>,
+    title: String,
+    target: Option<String>,
 }
 extern "system" fn dialog(h: H, m: u32, w: usize, l: isize) -> isize {
     unsafe {
         if m == 0x110 {
             SetWindowLongPtrW(h, -21, l);
+            let picker = &*(l as *const Picker);
+            SetWindowTextW(h, wide(&picker.title).as_ptr());
+            EnableWindow(GetDlgItem(h,606),picker.target.is_some() as i32);
+            if let Some(title)=&picker.target {set(h,607,&format!("引き継ぎ先：{title}"));}
             SetTimer(h, 1, 180, 0);
             return 1;
         }
@@ -96,7 +115,7 @@ extern "system" fn dialog(h: H, m: u32, w: usize, l: isize) -> isize {
                         h,
                         601,
                         if p.entries.is_empty() {
-                            "ローカルCLIの履歴がありません"
+                            "このプロジェクトのセッション履歴はありません"
                         } else {
                             "最近のセッション　｜　更新日時順"
                         },
@@ -117,9 +136,9 @@ extern "system" fn dialog(h: H, m: u32, w: usize, l: isize) -> isize {
                 if id == 602 {
                     set(h, 603, &p.entries[i as usize].project);
                 }
-                if id == 604 || id == 605 || id == 602 && w >> 16 == 2 {
+                if id == 604 || id == 605 || (id==606 && p.target.is_some()) || id == 602 && w >> 16 == 2 {
                     KillTimer(h, 1);
-                    EndDialog(h, 1 + i * 2 + if id == 604 { 0 } else { 1 });
+                    EndDialog(h, 1 + i * 3 + match id {604=>0,606=>2,_=>1});
                     return 1;
                 }
             }
@@ -128,11 +147,16 @@ extern "system" fn dialog(h: H, m: u32, w: usize, l: isize) -> isize {
     0
 }
 pub fn open(h: H, a: &mut App) -> Result<()> {
+    let project = a.root()?.to_owned();
+    let name = Path::new(&project).file_name().unwrap_or_default().to_string_lossy();
+    let title = format!("{name} のセッション履歴 — KAGARI");
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(scan());
+        let _ = tx.send(scan(&project));
     });
     let mut p = Picker {
+        title,
+        target: a.task.filter(|i|a.indices().contains(i)).map(|i|a.tasks[i].title.clone()),
         entries: vec![],
         rx,
     };
@@ -151,23 +175,27 @@ pub fn open(h: H, a: &mut App) -> Result<()> {
     if n == 0 {
         return Ok(());
     }
-    let e = &p.entries[((n - 1) / 2) as usize];
+    let action=(n-1)%3;
+    let e = &p.entries[((n - 1) / 3) as usize];
     let task = Task {
         agent: e.agent,
         session: e.id.clone(),
+        project: if action==2 {a.tasks[a.task.ok_or("タスクを選んでください")?].project.clone()} else {a.root()?.to_owned()},
         title: e.title.clone(),
         ..Default::default()
     };
-    select(h, a, &e.project, task, n % 2 == 0)
+    select(h, a, &e.project, task, action==1, action==2)
 }
-fn select(h: H, a: &mut App, root: &str, mut task: Task, ask: bool) -> Result<()> {
+fn select(h: H, a: &mut App, root: &str, mut task: Task, ask: bool, handoff: bool) -> Result<()> {
     let path = Path::new(root)
         .canonicalize()
         .map_err(|_| format!("作業フォルダーを開けません　{root}"))?;
     if !path.is_dir() {
         return Err("作業フォルダーが見つかりません".into());
     }
-    let project = path.to_str().ok_or("パス変換エラー")?.to_owned();
+    let cwd = path.to_str().ok_or("パス変換エラー")?;
+    let project = if task.project.is_empty() {project_root(cwd).to_owned()} else {task.project.clone()};
+    if project != cwd {task.cwd=cwd.to_owned();}
     task.project = project.clone();
     let mut next = a.clone();
     let proj = next
@@ -179,7 +207,7 @@ fn select(h: H, a: &mut App, root: &str, mut task: Task, ask: bool) -> Result<()
             next.projects.len() - 1
         });
     next.project = proj;
-    let i = next
+    let owner = next
         .tasks
         .iter()
         .position(|t| {
@@ -187,23 +215,27 @@ fn select(h: H, a: &mut App, root: &str, mut task: Task, ask: bool) -> Result<()
                 && if task.session.is_empty() {
                     t.session.is_empty() && t.title == task.title
                 } else {
-                    t.agent == task.agent && t.session == task.session
+                    t.contains_session(task.agent,&task.session)
                 }
-        })
-        .unwrap_or_else(|| {
-            next.tasks.push(task);
-            next.tasks.len() - 1
         });
+    let i=if handoff {
+        let target=a.task.filter(|i|a.indices().contains(i)).ok_or("引き継ぎ先のタスクを選択してください")?;
+        if owner.is_some_and(|i|i!=target){return Err("このセッションは別のタスクに登録済みです".into());}
+        target
+    } else { owner.unwrap_or(next.tasks.len()) };
+    if i==next.tasks.len() {
+        task.session_title=task.title.clone();
+        next.tasks.push(task);
+    } else if !task.session.is_empty() {
+        next.tasks[i].link_session(TaskSession{id:task.session,title:task.title,agent:task.agent,cwd:task.cwd,..Default::default()});
+    }
     next.task = Some(i);
-    next.department_filter.clear();
     next.query.clear();
-    next.unassigned = false;
     next.agent_filter = 0;
     next.metric = 0;
     next.save()?;
     *a = next;
     set(h, 182, "");
-    set(h, 124, "");
     msg(h, 125, 0x14e, 0, 0);
     refresh(h, a);
     render(h, a);
@@ -243,5 +275,6 @@ pub fn improve(h: H, a: &mut App) -> Result<()> {
             ..Default::default()
         },
         true,
+        false,
     )
 }

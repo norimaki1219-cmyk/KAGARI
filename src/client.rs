@@ -27,14 +27,18 @@ pub fn find(agent: usize) -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("APPDATA") {
         dirs.push(PathBuf::from(p).join("npm"))
     }
-    for dir in dirs {
+    let mut preferred = None;
+    'search: for dir in dirs {
         for ext in ["exe", "cmd"] {
             let p = dir.join(format!("{name}.{ext}"));
             if p.is_file() {
-                return Ok(p);
+                if agent == 0 { return Ok(p); }
+                preferred = Some(p);
+                break 'search;
             }
         }
     }
+    let mut bundled = Vec::new();
     if let Some(home) = home {
         let prefix = if agent == 0 {
             "openai.chatgpt-"
@@ -67,10 +71,26 @@ pub fn find(agent: usize) -> Result<PathBuf> {
                     p.join("resources/native-binary/claude.exe")
                 };
                 if bin.is_file() {
-                    return Ok(bin);
+                    if agent == 0 { return Ok(bin); }
+                    bundled.push((release(&p, prefix), bin));
                 }
             }
         }
     }
+    bundled.sort_by(|a,b| b.0.cmp(&a.0));
+    if let Some((version, bin)) = bundled.into_iter().next() {
+        if let Some(path) = preferred.as_ref() {
+            let current = Command::new(path).arg("--version").creation_flags(0x08000000)
+                .output().ok().filter(|o| o.status.success())
+                .and_then(|o| {
+                    let text = String::from_utf8(o.stdout).ok()?;
+                    text.split_whitespace().next()?.split('.')
+                        .map(str::parse::<u64>).collect::<std::result::Result<Vec<_>, _>>().ok()
+                });
+            if current.is_some_and(|current| current >= version) { return Ok(path.clone()); }
+        }
+        return Ok(bin);
+    }
+    if let Some(path) = preferred { return Ok(path); }
     Err(format!("{name} が見つかりません。CLIまたは対応するVS Code拡張をインストールしてから、もう一度実行してください。"))
 }

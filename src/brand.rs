@@ -97,18 +97,7 @@ pub fn draw(l: isize) {
     let label = index
         .and_then(|i| AGENTS.get(i).copied())
         .unwrap_or("全担当");
-    let closed = d.state & 0x1000 != 0;
-    paint(
-        d.dc,
-        d.rect,
-        index,
-        d.state & 1 != 0,
-        if closed && index.is_some() {
-            None
-        } else {
-            Some(label)
-        },
-    );
+    paint(d.dc, d.rect, index, d.state & 1 != 0, Some(label));
     if d.state & 16 != 0 {
         unsafe {
             DrawFocusRect(d.dc, &d.rect);

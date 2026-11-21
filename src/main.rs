@@ -1,9 +1,16 @@
 #![windows_subsystem = "windows"]
+mod action_summary;
+use action_summary::Reply;
 mod ask;
 mod brand;
 mod chart;
 mod client;
 mod editor;
+mod decisions;
+mod voice_input;
+mod markdown_preview;
+mod slack;
+mod reply_links;
 mod native;
 mod picker;
 mod sessions;
@@ -78,10 +85,26 @@ const REQUESTS: [&str; 5] = [
     "不具合の原因を調べて",
 ];
 #[derive(Clone, Default)]
+struct TaskSession {
+    id: String,
+    title: String,
+    agent: usize,
+    cwd: String,
+    history_key: String,
+    model: String,
+    effort: String,
+}
+#[derive(Clone, Default)]
 struct Task {
+    other_sessions: Vec<TaskSession>,
+    session_title: String,
     session: String,
     history_key: String,
     model: String,
+    effort: String,
+    next_action: String,
+    submitted_action_run: String,
+    cwd: String,
     pinned: bool,
     project: String,
     title: String,
@@ -89,7 +112,7 @@ struct Task {
     status: usize,
     due: String,
     check: String,
-    dept: String,
+    legacy_department: String, // Retain the original TSV column when saving older tasks.
     docs: [String; 3],
 }
 #[derive(Default, Clone)]
@@ -98,10 +121,13 @@ struct App {
     metric: usize,
     search_panel: bool,
     query: String,
-    department_filter: String,
-    unassigned: bool,
     agent_filter: usize,
     projects: Vec<String>,
+    discovered: Vec<String>,
+    progress_history: Vec<ProgressPoint>,
+    pinned_projects: std::collections::BTreeSet<String>,
+    pinned_projects_only: bool,
+    default_project: Option<String>,
     tasks: Vec<Task>,
     project: usize,
     task: Option<usize>,
@@ -129,10 +155,77 @@ fn decode(s: &str) -> String {
         .replace("%0D", "\r")
         .replace("%25", "%")
 }
+impl Task {
+    fn swap_session(&mut self, mut session: TaskSession) -> TaskSession {
+        use std::mem::swap;
+        swap(&mut self.session,&mut session.id);
+        swap(&mut self.session_title,&mut session.title);
+        swap(&mut self.agent,&mut session.agent);
+        swap(&mut self.cwd,&mut session.cwd);
+        swap(&mut self.history_key,&mut session.history_key);
+        swap(&mut self.model,&mut session.model);
+        swap(&mut self.effort,&mut session.effort);
+        session
+    }
+    fn activate(&mut self, index: usize) {
+        let link = std::mem::take(&mut self.other_sessions[index]);
+        let old = self.swap_session(link);
+        self.other_sessions[index] = old;
+    }
+    fn contains_session(&self, agent:usize,id:&str)->bool {
+        !id.is_empty() && ((self.agent==agent && self.session==id) ||
+            self.other_sessions.iter().any(|s| s.agent==agent && s.id==id))
+    }
+    fn link_session(&mut self, incoming: TaskSession) {
+        if self.agent==incoming.agent && self.session==incoming.id {return;}
+        if let Some(i)=self.other_sessions.iter().position(|s|s.agent==incoming.agent && s.id==incoming.id) {
+            self.activate(i);
+        } else {
+            let mut old=self.swap_session(incoming);
+            if !old.id.is_empty() || !old.history_key.is_empty() {
+                if old.title.is_empty() {old.title=if old.id.is_empty() {"ローカルの依頼履歴".into()}else{self.title.clone()};}
+                self.other_sessions.push(old);
+            }
+        }
+    }
+    fn working_dir(&self)->&str {if self.cwd.is_empty(){&self.project}else{&self.cwd}}
+}
+fn project_root(path: &str) -> &str {
+    for project in Path::new(path).ancestors() {
+        if project.parent().and_then(Path::file_name)
+            .is_some_and(|name| name.eq_ignore_ascii_case(".company")) {
+            return project.to_str().unwrap_or(path);
+        }
+    }
+    path
+}
+#[derive(Clone)]
+struct ProgressPoint {
+    project: String,
+    millis: u64,
+    counts: [usize;4],
+}
 impl App {
-    fn save(&self) -> Result<()> {
+    fn progress_changes(&self) -> Vec<ProgressPoint> {
+        use std::collections::{BTreeMap,HashMap};
+        let mut latest=HashMap::new();
+        for point in &self.progress_history {
+            latest.insert(point.project.as_str(),point.counts);
+        }
+        let mut current=BTreeMap::new();
+        for path in &self.projects {current.insert(path.to_lowercase(),[0usize;4]);}
+        for task in &self.tasks {current.entry(task.project.to_lowercase()).or_default()[task.status]+=1;}
+        let millis=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+        current.into_iter().filter(|(project,counts)|latest.get(project.as_str())!=Some(counts))
+            .map(|(project,counts)|ProgressPoint{project,millis,counts}).collect()
+    }
+    fn save(&mut self) -> Result<()> {
         let mut rows = vec![format!("V\t{}", self.panes)];
+        if let Some(project)=&self.default_project {rows.push(format!("DP\t{}",escape(project)));}
+        if self.pinned_projects_only { rows.push("CP\t1".into()); }
+        for p in &self.pinned_projects { rows.push(format!("PP\t{}", escape(p))); }
         for p in &self.projects {
+            if self.discovered.contains(p) && !self.tasks.iter().any(|t| &t.project == p) {continue;}
             rows.push(format!("P\t{}", escape(p)));
         }
         for t in &self.tasks {
@@ -143,7 +236,7 @@ impl App {
                 t.status.to_string(),
                 t.due.clone(),
                 t.check.clone(),
-                t.dept.clone(),
+                t.legacy_department.clone(),
                 t.docs[0].clone(),
                 t.docs[1].clone(),
                 t.docs[2].clone(),
@@ -151,6 +244,11 @@ impl App {
                 t.history_key.clone(),
                 t.model.clone(),
                 t.session.clone(),
+                t.effort.clone(),
+                t.next_action.clone(),
+                t.cwd.clone(),
+                t.session_title.clone(),
+                t.submitted_action_run.clone(),
             ];
             rows.push(format!(
                 "T\t{}",
@@ -160,29 +258,50 @@ impl App {
                     .collect::<Vec<_>>()
                     .join("\t")
             ));
+            for s in &t.other_sessions {
+                let fields=[s.agent.to_string(),s.id.clone(),s.title.clone(),s.cwd.clone(),s.history_key.clone(),s.model.clone(),s.effort.clone()];
+                rows.push(format!("S\t{}",fields.iter().map(|v|escape(v)).collect::<Vec<_>>().join("\t")));
+            }
         }
         rows.push(format!("L\t{}", escape(&self.log)));
+        let changes=self.progress_changes();
+        for point in self.progress_history.iter().chain(&changes) {
+            let [a,b,c,d]=point.counts;
+            rows.push(format!("H\t{}\t{}\t{a}\t{b}\t{c}\t{d}",escape(&point.project),point.millis));
+        }
         let dest = state_path()?;
         fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
         let tmp = dest.with_extension("tmp");
         fs::write(&tmp, rows.join("\n"))
             .and_then(|_| fs::rename(tmp, dest))
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        self.progress_history.extend(changes);
+        Ok(())
     }
     fn load() -> Result<Self> {
         let mut a = Self::default();
         let data = match fs::read_to_string(state_path()?) {
             Ok(v) => v,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(a),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(e.to_string()),
         };
         for line in data.lines() {
             let f: Vec<_> = line.split('\t').map(decode).collect();
             match f[0].as_str() {
                 "V" if f.len() == 2 => a.panes = f[1].parse::<u8>().unwrap_or(0) & 31,
+                "H" if f.len()==7 => {
+                    let mut counts=[0;4];
+                    for (count,value) in counts.iter_mut().zip(&f[3..]) {*count=value.parse().map_err(|_|"進捗の件数が不正です")?;}
+                    a.progress_history.push(ProgressPoint{project:f[1].clone(),millis:f[2].parse().map_err(|_|"進捗の記録日時が不正です")?,counts});
+                }
+                "DP" if f.len()==2 => a.default_project=Some(f[1].clone()),
+                "CP" if f.len() == 2 => a.pinned_projects_only = f[1] == "1",
+                "PP" if f.len() == 2 => { a.pinned_projects.insert(f[1].to_lowercase()); },
                 "P" if f.len() == 2 => a.projects.push(f[1].clone()),
                 "L" if f.len() == 2 => a.log = f[1].clone(),
-                "T" if matches!(f.len(), 11 | 12 | 14 | 15) => a.tasks.push(Task {
+                "T" if matches!(f.len(), 11 | 12 | 14 | 15 | 16 | 17 | 18 | 19 | 20) => a.tasks.push(Task {
+                    other_sessions: Vec::new(),
+                    session_title: f.get(18).or_else(||f.get(2)).cloned().unwrap_or_default(),
                     session: f.get(14).cloned().unwrap_or_default(),
                     history_key: match f.get(12) {
                         Some(k)
@@ -194,6 +313,14 @@ impl App {
                         Some(_) => return Err("履歴IDが不正です".into()),
                         None => String::new(),
                     },
+                    cwd: f.get(17).cloned().unwrap_or_default(),
+                    submitted_action_run: match f.get(19) {
+                        Some(v) if v.is_empty() || ask::valid_run_key(v) => v.clone(),
+                        Some(_) => return Err("依頼履歴IDが不正です".into()),
+                        None => ask::legacy_action_run(f.get(12), f.get(16)).unwrap_or_default(),
+                    },
+                    next_action: f.get(16).cloned().unwrap_or_default(),
+                    effort: f.get(15).cloned().unwrap_or_default(),
                     model: f.get(13).cloned().unwrap_or_default(),
                     pinned: matches!(f.get(11).map(String::as_str), Some("1")),
                     project: f[1].clone(),
@@ -210,13 +337,93 @@ impl App {
                         .ok_or("Invalid status")?,
                     due: f[5].clone(),
                     check: f[6].clone(),
-                    dept: f[7].clone(),
+                    legacy_department: f[7].clone(),
                     docs: [f[8].clone(), f[9].clone(), f[10].clone()],
                 }),
+                "S" if f.len()==8 => {
+                    let task=a.tasks.last_mut().ok_or("セッションの親タスクがありません")?;
+                    let agent=f[1].parse::<usize>().ok().filter(|n|*n<AGENTS.len()).ok_or("担当AIが不正です")?;
+                    if f[5].len()>64 || !f[5].bytes().all(|c|c.is_ascii_digit() || c==b'-') {return Err("履歴IDが不正です".into());}
+                    task.other_sessions.push(TaskSession{agent,id:f[2].clone(),title:f[3].clone(),cwd:f[4].clone(),history_key:f[5].clone(),model:f[6].clone(),effort:f[7].clone()});
+                }
                 _ => return Err("保存形式を読み取れません".into()),
             }
         }
+        let mut roots = Vec::new();
+        for path in &a.projects {
+            let project = project_root(path);
+            if !roots.iter().any(|s: &String| s.eq_ignore_ascii_case(project)) {roots.push(project.to_owned());}
+        }
+        for task in &mut a.tasks {
+            let root = project_root(&task.project);
+            if let Some(project) = roots.iter().find(|p|p.eq_ignore_ascii_case(root)) {
+                if *project != task.project {
+                    if task.cwd.is_empty(){task.cwd=task.project.clone();}
+                    if let Ok(prefix)=Path::new(&task.project).strip_prefix(root) {
+                        for doc in task.docs.iter_mut().filter(|d|!d.is_empty()) {
+                            *doc=prefix.join(&*doc).to_string_lossy().into_owned();
+                        }
+                    }
+                    task.project=project.clone();
+                }
+            }
+        }
+        a.projects=roots;
+        a.discover_departments();
+        a.project=a.default_project_index().unwrap_or(0);
+        if !a.progress_changes().is_empty(){a.save()?;}
         Ok(a)
+    }
+    fn discover_departments(&mut self) {
+        let is_company = |p: &Path| p.file_name().is_some_and(|n| n.eq_ignore_ascii_case(".company"));
+        let mut companies: Vec<PathBuf> = self.projects.iter()
+            .filter_map(|p| Path::new(p).ancestors().find(|dir|is_company(dir)).map(Path::to_owned))
+            .collect();
+        if let Ok(exe) = std::env::current_exe().and_then(|p|p.canonicalize()) {
+            if let Some(company) = exe.ancestors().find(|dir| is_company(dir)) {
+                companies.push(company.to_owned());
+            }
+        }
+        companies.sort();
+        companies.dedup();
+        for company in companies {
+            let Some(name) = company.to_str() else {continue;};
+            if !self.projects.iter().any(|p|p.eq_ignore_ascii_case(name)) {self.projects.push(name.to_owned());}
+            let Ok(entries) = fs::read_dir(&company) else {continue;};
+            let mut children = Vec::new();
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') || ["_task_xml","tmp","outputs","ClaudeCode","Codex"].iter().any(|n|name.eq_ignore_ascii_case(n)) {continue;}
+                if entry.path().is_dir() { children.push(entry.path().to_string_lossy().into_owned()); }
+            }
+            children.sort_by_key(|p|p.to_lowercase());
+            for child in children {
+                if !self.projects.iter().any(|p|p.eq_ignore_ascii_case(&child)) {
+                    self.discovered.push(child.clone());
+                    self.projects.push(child);
+                }
+            }
+        }
+    }
+    fn default_project_index(&self) -> Option<usize> {
+        let path=self.default_project.as_ref()?;
+        self.projects.iter().position(|p| p.eq_ignore_ascii_case(path))
+    }
+    fn delete_task(&mut self, index: usize) -> Result<()> {
+        let visible = self.indices();
+        let position = visible.iter().position(|&i| i == index).ok_or("表示中のタスクを選んでください")?;
+        let mut next = self.clone();
+        next.tasks.remove(index);
+        next.task = match self.task {
+            Some(i) if i != index => Some(if i > index { i - 1 } else { i }),
+            _ => {
+                let remaining = next.indices();
+                remaining.get(position).or_else(|| remaining.last()).copied()
+            }
+        };
+        next.save()?;
+        *self = next;
+        Ok(())
     }
     fn root(&self) -> Result<&str> {
         self.projects
@@ -224,18 +431,19 @@ impl App {
             .map(String::as_str)
             .ok_or("プロジェクトを登録してください".into())
     }
+    fn document_root(&self) -> Result<&str> {
+        self.task.and_then(|i| self.tasks.get(i)).map(|t| t.project.as_str()).map_or_else(||self.root(), Ok)
+    }
     fn scope(&self) -> Vec<usize> {
+        let Ok(selected) = self.root().map(Path::new) else { return Vec::new(); };
+        let company = selected.file_name().is_some_and(|name| name.eq_ignore_ascii_case(".company"));
         let mut visible: Vec<_> = self
             .tasks
             .iter()
             .enumerate()
-            .filter(|(_, t)| Some(&t.project) == self.projects.get(self.project))
             .filter(|(_, t)| {
-                if self.unassigned {
-                    t.dept.is_empty()
-                } else {
-                    self.department_filter.is_empty() || t.dept == self.department_filter
-                }
+                let project = Path::new(&t.project);
+                project == selected || (company && project.ancestors().any(|p| p.as_os_str().eq_ignore_ascii_case(selected.as_os_str())))
             })
             .filter(|(_, t)| self.agent_filter == 0 || self.agent_filter == t.agent + 1)
             .map(|(i, _)| i)
@@ -504,45 +712,6 @@ fn rtf_text(s: &str) -> String {
     }
     out
 }
-fn markdown(s: &str) -> String {
-    let mut r = String::from(
-        "{\\rtf1\\ansi\\uc1\\deff0{\\fonttbl{\\f0 Yu Gothic UI;}{\\f1 Consolas;}}\\f0\\fs20 ",
-    );
-    let mut code = false;
-    for line in s.lines() {
-        if line.starts_with("\u{60}\u{60}\u{60}") {
-            code = !code;
-            continue;
-        }
-        let level = line.bytes().take_while(|v| *v == b'#').count();
-        let (style, body) = if code {
-            ("\\f1 ", line.to_owned())
-        } else if (1..=6).contains(&level) && line[level..].starts_with(' ') {
-            (
-                if level == 1 {
-                    "\\b\\fs30 "
-                } else {
-                    "\\b\\fs24 "
-                },
-                line[level..].trim().to_owned(),
-            )
-        } else {
-            (
-                "",
-                line.replacen("- [x] ", "☑ ", 1)
-                    .replacen("- [ ] ", "□ ", 1)
-                    .strip_prefix("- ")
-                    .map(|s| format!("• {s}"))
-                    .unwrap_or_else(|| {
-                        line.replacen("- [x] ", "☑ ", 1).replacen("- [ ] ", "□ ", 1)
-                    }),
-            )
-        };
-        r.push_str(&format!("{{{}{}}}\\par ", style, rtf_text(&body)))
-    }
-    r.push('}');
-    r
-}
 fn doc_path(root: &str, s: &str) -> Result<PathBuf> {
     let p = Path::new(s);
     if p.is_absolute()
@@ -572,15 +741,15 @@ fn preview(h: H, a: &App) {
             if a.projects.is_empty() {
                 "「＋ プロジェクト」から作業フォルダーを選んでください。"
             } else {
-                "左のツリーからMarkdownを選んでください。"
+                "タスク資料の「Markdownを開く」から文書を選んでください。"
             },
         );
         return;
     }
-    display_document(h, doc_path(a.root().unwrap_or(""), &s));
+    display_document(h, doc_path(a.document_root().unwrap_or(""), &s));
 }
 fn display_document(h: H, path: Result<PathBuf>) {
-    let result: Result<String> = (|| {
+    let result: Result<markdown_preview::Preview> = (|| {
         let path = path?;
         let f = fs::File::open(path).map_err(|e| e.to_string())?;
         let mut body = String::new();
@@ -590,15 +759,10 @@ fn display_document(h: H, path: Result<PathBuf>) {
         if body.len() > 512 * 1024 {
             return Err("文書の表示上限は512 KiBです".into());
         }
-        Ok(markdown(&body))
+        Ok(markdown_preview::Preview::document(&body,native::document_width(h,120)))
     })();
     match result {
-        Ok(r) => {
-            let mut bytes = r.into_bytes();
-            bytes.push(0);
-            let params = [0u32, 1252];
-            msg(h, 120, 0x461, params.as_ptr() as usize, bytes.as_ptr() as _);
-        }
+        Ok(preview) => { preview.show(h, 120); preview.populate_contents(h); },
         Err(e) => set(h, 120, &e),
     }
 }
@@ -702,10 +866,7 @@ fn run(h: H, a: &mut App, id: i32, event: usize) -> Result<()> {
         }
         (128, 0) => {
             a.metric = 0;
-            set(h, 124, "");
             msg(h, 125, 0x14e, 0, 0);
-            a.unassigned = false;
-            a.department_filter.clear();
             a.agent_filter = 0;
             a.task = a.indices().first().copied();
             refresh(h, a);
@@ -716,17 +877,14 @@ fn run(h: H, a: &mut App, id: i32, event: usize) -> Result<()> {
                 return Ok(());
             };
 
-            a.unassigned = name.is_empty();
-            a.department_filter = name;
+            let Some(project) = a.projects.iter().position(|p| p == &name) else { return Ok(()); };
+            a.project = project;
             a.metric = 0;
-            set(h, 124, &a.department_filter);
             a.task = a.indices().first().copied();
             refresh(h, a);
             render(h, a);
         }
         (126, 0) => {
-            a.unassigned = false;
-            a.department_filter = get(h, 124).trim().to_owned();
             a.agent_filter = choice(h, 125);
             a.task = a.indices().first().copied();
             refresh(h, a);
@@ -855,10 +1013,11 @@ fn register(h: H, a: &mut App, folder: &str) -> Result<()> {
     if !p.is_dir() {
         return Err("フォルダーを選択してください".into());
     }
-    let s = p.to_str().ok_or("パス変換エラー")?.to_owned();
+    let s = project_root(p.to_str().ok_or("パス変換エラー")?).to_owned();
     if !a.projects.contains(&s) {
         a.projects.push(s.clone())
     }
+    a.discover_departments();
     a.project = a.projects.iter().position(|p| p == &s).unwrap();
     a.task = a.indices().first().copied();
     a.save()?;
@@ -883,7 +1042,7 @@ fn save_doc(h: H, a: &mut App) -> Result<()> {
     if let Some(i) = a.task {
         let path = get(h, 118);
         if !path.is_empty() {
-            doc_path(a.root()?, &path)?;
+            doc_path(a.document_root()?, &path)?;
         }
         let mut next = a.clone();
         next.tasks[i].docs[next.doc] = path;
@@ -1027,6 +1186,17 @@ fn main() {
 mod tests {
     use super::*;
     #[test]
+    fn company_includes_own_tasks_and_descendant_projects() {
+        let mut app = App::default();
+        app.projects = [r"D:\.company",r"D:\.company\eda",r"D:\.company\kasane",r"E:\.company\eda",r"D:\.company-old"].map(String::from).to_vec();
+        app.tasks = app.projects.iter().map(|p| Task {project:p.clone(), ..Default::default()}).collect();
+        assert_eq!(app.scope(),vec![0,1,2]);
+        app.task=Some(2);
+        assert_eq!(app.document_root().unwrap(),app.projects[2]);
+        app.project=1;
+        assert_eq!(app.scope(),vec![1]);
+    }
+    #[test]
     fn dates() {
         assert!(parse_date("2025-02-29").is_none());
         assert_eq!(
@@ -1039,7 +1209,7 @@ mod tests {
     fn encoding() {
         let s = "日本語\t%09\n";
         assert_eq!(decode(&escape(s)), s);
-        assert!(markdown("# 結果\n- [x] OK").contains("\\b\\fs30"));
+        assert!(markdown_preview::Preview::document("# 結果\n- [x] OK",6000).rtf.contains("\\b\\fs34"));
         assert!(doc_path("D:\\work", "../private.md").is_err());
     }
 }

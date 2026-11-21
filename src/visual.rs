@@ -217,6 +217,72 @@ pub fn draw(l: isize) {
         }
     }
 }
+#[link(name="user32")]
+extern "system" {
+    fn LoadImageW(instance:H, name:Ptr, kind:u32, width:i32, height:i32, flags:u32)->H;
+    fn DrawIconEx(dc:H,x:i32,y:i32,icon:H,w:i32,h:i32,step:u32,brush:H,flags:u32)->i32;
+    fn GetDpiForWindow(h:H)->u32;
+}
+fn action_icon(hwnd:H,resource:usize)->(H,i32) {
+    let size=(unsafe{GetDpiForWindow(hwnd)}.max(96) as i32*16+48)/96;
+    let icon=unsafe{LoadImageW(GetModuleHandleW(std::ptr::null()),resource as Ptr,1,size,size,0x8000)};
+    (icon,size)
+}
+pub(super) fn set_action_icon(h:H,id:i32,resource:usize){
+    let (icon,_)=action_icon(h,resource);
+    msg(h,id,0xF7,1,icon); // BM_SETIMAGE with the shared icon and the existing button label.
+}
+pub fn draw_send(h:H,l:isize){
+    let d=unsafe{&*(l as *const Draw)};
+    let disabled=d.state&4!=0;
+    let label=get(h,404);
+    let running=label=="実行中…";
+    let fill=if disabled && running {0xe4e8e8}else if disabled {0x676752}else if d.state&1!=0{0x404605}else{0x5f6508};
+    unsafe{
+        let brush=CreateSolidBrush(fill);FillRect(d.dc,&d.rect,brush);DeleteObject(brush);
+        let old=SelectObject(d.dc,SendMessageW(d.hwnd,0x31,0,0));
+        SetBkMode(d.dc,1);SetTextColor(d.dc,if disabled && running{0x636666}else{0xffffff});
+        let mut rect=d.rect;
+        let resource=match label.as_str(){"実行中…"=>33,"再送する"=>32,_=>31};
+        let (icon,size)=action_icon(d.hwnd,resource);
+        let text=wide(&label);
+        let mut bounds=Rect::default();
+        DrawTextW(d.dc,text.as_ptr(),-1,&mut bounds,0x420);
+        let gap=(size/4).max(2);
+        let x=(rect.x+(rect.r-rect.x-size-gap-bounds.r)/2).max(rect.x);
+        DrawIconEx(d.dc,x,(rect.y+rect.b-size)/2,icon,size,size,0,0,3);
+        rect.x=x+size+gap;
+        DrawTextW(d.dc,text.as_ptr(),-1,&mut rect,0x24);
+        if d.state&16!=0 {DrawFocusRect(d.dc,&rect);}
+        if old!=0{SelectObject(d.dc,old);}
+    }
+}
+// COLORREF values use BGR byte order.
+#[link(name="user32")]
+extern "system" { fn GetSysColorBrush(index:i32)->H; }
+pub fn task_caption(h: H, dc: usize, hwnd: H) -> H {
+    if unsafe{GetDlgCtrlID(hwnd)}==433 {
+        let status=get(h,433);
+        let (ink,fill)=if status.starts_with("実行中"){(0x745211,0xf5eee0)}
+            else if status.starts_with("回答受信"){(0x3e5920,0xe6f2e1)}
+            else if status=="依頼待ち"{(0x505a54,0xeaf0ed)}
+            else{(0x1f3d80,0xdbebfa)};
+        #[link(name="gdi32")]
+        extern "system"{fn SetDCBrushColor(dc:H,c:u32)->u32;fn GetStockObject(id:i32)->H;fn SetBkColor(dc:H,c:u32)->u32;}
+        unsafe{SetTextColor(dc as H,ink);SetBkColor(dc as H,fill);SetDCBrushColor(dc as H,fill);return GetStockObject(18);}
+    }
+    let color = match unsafe { GetDlgCtrlID(hwnd) } {
+        420 => 0x775221, // summary, blue
+        421 => 0x626018, // next action, teal
+        431 | 432 => 0x734366, // history, purple
+        _ => return 0,
+    };
+    unsafe {
+        SetTextColor(dc as H, color);
+        SetBkMode(dc as H, 1);
+        GetSysColorBrush(15)
+    }
+}
 pub fn legend(dc: usize, hwnd: H) -> H {
     let brush = native::background(dc);
     let id = unsafe { GetDlgCtrlID(hwnd) };

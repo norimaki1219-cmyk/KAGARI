@@ -53,3 +53,60 @@ pub fn folder(h: H) -> Option<String> {
         path
     }
 }
+#[repr(C)]
+#[derive(Default)]
+struct OpenFileName {
+    size: u32,
+    owner: H,
+    instance: H,
+    filter: Ptr,
+    custom_filter: *mut u16,
+    custom_capacity: u32,
+    filter_index: u32,
+    file: *mut u16,
+    capacity: u32,
+    file_title: *mut u16,
+    title_capacity: u32,
+    initial_dir: Ptr,
+    title: Ptr,
+    flags: u32,
+    file_offset: u16,
+    extension_offset: u16,
+    default_extension: Ptr,
+    custom_data: H,
+    hook: H,
+    template: Ptr,
+    reserved: H,
+    reserved_value: u32,
+    extra_flags: u32,
+}
+#[link(name = "comdlg32")]
+extern "system" {
+    fn GetOpenFileNameW(info: *mut OpenFileName) -> i32;
+    fn CommDlgExtendedError() -> u32;
+}
+pub fn image(owner: H) -> Result<Option<PathBuf>> {
+    let filter = wide("画像 (PNG・JPEG・GIF・WebP)\0*.png;*.jpg;*.jpeg;*.gif;*.webp\0");
+    let title = wide("依頼に添付する画像");
+    let mut path = vec![0u16; 32768];
+    let mut dialog = OpenFileName {
+        size: std::mem::size_of::<OpenFileName>() as u32,
+        owner,
+        filter: filter.as_ptr(),
+        title: title.as_ptr(),
+        file: path.as_mut_ptr(),
+        capacity: path.len() as u32,
+        flags: 0x1000 | 0x800 | 0x8,
+        ..Default::default()
+    };
+    if unsafe { GetOpenFileNameW(&mut dialog) } != 0 {
+        Ok(Some(PathBuf::from(value(&path))))
+    } else {
+        let code = unsafe { CommDlgExtendedError() };
+        if code == 0 {
+            Ok(None)
+        } else {
+            Err(format!("画像の選択に失敗しました ({code})"))
+        }
+    }
+}

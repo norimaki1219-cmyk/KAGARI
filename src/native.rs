@@ -76,7 +76,6 @@ pub fn init(h: H) {
     for (id, hint) in [
         (110, "YYYY-MM-DD"),
         (111, "例 15:00"),
-        (124, "すべて"),
         (182, "タスクを検索"),
         (123, "SHIRANUIログのパス"),
     ] {
@@ -147,13 +146,17 @@ pub fn row(h: H, i: usize, fields: [&str; 5], status: usize, selected: bool) {
     }
 }
 #[derive(Default)]
-struct Layout {
+pub(super) struct Layout {
     base: Rect,
     outer: Rect,
     children: Vec<(H, Rect)>,
 }
 thread_local! {static LAYOUT:RefCell<Layout>=RefCell::default();}
 pub fn capture(h: H) {
+    LAYOUT.with(|v| *v.borrow_mut() = Layout::capture(h));
+}
+impl Layout {
+pub(super) fn capture(h: H) -> Self {
     unsafe {
         let mut l = Layout::default();
         GetClientRect(h, &mut l.base);
@@ -166,12 +169,11 @@ pub fn capture(h: H) {
             l.children.push((c, r));
             c = GetWindow(c, 2);
         }
-        LAYOUT.with(|v| *v.borrow_mut() = l);
+        l
     }
 }
-pub fn minimum(ptr: isize) {
-    LAYOUT.with(|v| {
-        let r = v.borrow().outer;
+    pub(super) fn minimum(&self, ptr: isize) {
+        let r = self.outer;
         if r.r > r.x {
             unsafe {
                 let p = ptr as *mut i32;
@@ -179,7 +181,60 @@ pub fn minimum(ptr: isize) {
                 *p.add(7) = r.b - r.y;
             }
         }
-    })
+    }
+
+    pub(super) fn resize_task(&self, h: H, document: bool) {
+        let mut now = Rect::default();
+        unsafe { GetClientRect(h, &mut now); }
+        let dx = now.r - self.base.r;
+        let dy = now.b - self.base.b;
+        let split = dy * 2 / 3;
+        for &(child, rect) in &self.children {
+            let id = unsafe { GetDlgCtrlID(child) };
+            let (x, y, width, height) = if document {
+                let sidebar=dx/4;
+                match id {120=>(sidebar,0,dx-sidebar,dy), 672=>(0,0,sidebar,dy), 2=>(dx,dy,0,0), _=>continue}
+            } else {
+                match id {
+                    414 => (0,0,dx,split),
+                    435 => (dx,0,0,0),
+                    438 | 439 => (dx,split,0,0),
+                    421 => (0,split,0,0),
+                    681 => (0,split,dx/3,dy-split),
+                    685 => (dx/3,split,dx-dx/3,0),
+                    683 => (dx/3,split,dx-dx/3,(dy-split)/2),
+                    686 => (dx/3,split+(dy-split)/2,dx-dx/3,0),
+                    684 => (dx/3,split+(dy-split)/2,dx-dx/3,dy-split-(dy-split)/2),
+                    403 => (0,split,dx,dy-split),
+                    416 => (dx,0,0,0),
+                    433 | 415 | 111 | 408 | 109 => (0,0,dx,0),
+                    409 => (0,0,dx/2,dy),
+                    405 => (dx/2,0,dx-dx/2,dy),
+                    432 => (dx/2,0,0,0),
+                    434 | 413 => (0,dy,dx,0),
+                    114 | 404 => (dx,dy,0,0),
+                    2 | 437 | 411 | 412 | 406 => (0,dy,0,0),
+                    _ => continue,
+                }
+            };
+            unsafe { MoveWindow(child, rect.x+x, rect.y+y, rect.r-rect.x+width, rect.b-rect.y+height, 1); }
+        }
+    }
+}
+pub(super) fn document_width(h:H,id:i32)->i32 {
+    #[link(name="user32")]
+    extern "system" {fn GetDpiForWindow(h:H)->u32;}
+    let child=unsafe{GetDlgItem(h,id)};
+    let dpi=unsafe{GetDpiForWindow(child)}.max(96) as i32;
+    ((client_size(child).0-12)*1440/dpi).max(1200)
+}
+pub(super) fn client_size(h:H) -> (i32,i32) {
+    let mut rect = Rect::default();
+    unsafe { GetClientRect(h,&mut rect); }
+    (rect.r,rect.b)
+}
+pub fn minimum(ptr: isize) {
+    LAYOUT.with(|v| v.borrow().minimum(ptr));
 }
 pub fn resize(h: H) {
     LAYOUT.with(|v| {
@@ -354,7 +409,7 @@ fn pane(id: i32) -> u8 {
     match id {
         104 | 127 | 143 | 145 | 142 | 191 => 1,
         105 | 141 | 150..=153 | 155 | 170..=173 | 213..=215 => 2,
-        106 | 113 | 115 | 124..=126 | 128 | 156 | 159 | 160 | 210 | 212 => 4,
+        106 | 113 | 115 | 125..=126 | 128 | 156 | 159 | 160 | 210 => 4,
         118..=120 | 175..=177 | 181 | 211 => 8,
         _ => 0,
     }
@@ -388,7 +443,7 @@ pub fn layout_menu(h: H, flags: u8) -> Option<i32> {
         }
         for (id, name) in [
             (194, "プロジェクト"),
-            (195, "部署別の進捗・KPI"),
+            (195, "プロジェクト別の進捗・KPI"),
             (196, "作業キュー"),
             (197, "タスク資料"),
             (198, "左右に分割"),
