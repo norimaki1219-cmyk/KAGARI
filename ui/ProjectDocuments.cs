@@ -155,10 +155,14 @@ internal sealed partial class Desktop {
   try{projectHomeFile=EnsureMainDocument(roots[index]);OpenProjectFile(roots[index],projectHomeFile);}
   catch(Exception ex){At<TextBlock>("FileName").Text="システム構成を開けません。"+ex.Message;}
  }
+ // 2026-11-26: CHROMARCH city tasks keep their work sheets in the hand-off bundle (outside the project).
+ // The core (doc_path) decides whether the project may open them; this only lets the absolute path through.
+ static readonly Regex ExternalTaskDoc=new Regex(@"^[A-Za-z]:\\CHROMARCH-[^\\]+\\(tasks\\Q\d{3}\.md|INTEGRATION_STATUS\.md|受入結果\.md|QUEUE-ALL-CITIES-[^\\]*\.md)$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant);
  void OpenProjectFile(string root,string path){
   string prefix=root.TrimEnd('\\')+"\\";
-  if(!path.StartsWith(prefix,StringComparison.OrdinalIgnoreCase))return;
-  string relative=path.Substring(prefix.Length);
+  bool inside=path.StartsWith(prefix,StringComparison.OrdinalIgnoreCase);
+  if(!inside && !ExternalTaskDoc.IsMatch(path))return;
+  string relative=inside?path.Substring(prefix.Length):path;
   if(DocComparer.Equals(root,DocumentProject()))Run(704,0,relative);
   else{
    int index=Array.FindIndex(DocumentRoots(),p=>DocComparer.Equals(p,root));

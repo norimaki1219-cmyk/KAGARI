@@ -1010,8 +1010,32 @@ fn rtf_text(s: &str) -> String {
     }
     out
 }
+// 2026-11-26: the CHROMARCH city tasks keep their work sheets in the hand-off bundle
+// (D:\CHROMARCH-*\tasks\Q###.md), outside the project. Accept exactly those sheets and the
+// external reports already allowed for links, and only for the chromarch project.
+fn external_task_doc(root: &str, path: &Path) -> bool {
+    let project = Path::new(root).canonicalize().unwrap_or_else(|_| PathBuf::from(root));
+    if project_alias(&project) != Some("chromarch")
+        || path.components().any(|c| !matches!(c, std::path::Component::Prefix(_) | std::path::Component::RootDir | std::path::Component::Normal(_)))
+    {
+        return false;
+    }
+    let Some(drive) = path.ancestors().last() else { return false };
+    if chromarch_report(drive, path) { return true; }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let sheet = name.len() == 7 && name[..1].eq_ignore_ascii_case("q")
+        && name[1..4].bytes().all(|b| b.is_ascii_digit()) && name[4..].eq_ignore_ascii_case(".md");
+    let Some(tasks) = path.parent() else { return false };
+    let Some(bundle) = tasks.parent() else { return false };
+    sheet && tasks.file_name().is_some_and(|n| n.eq_ignore_ascii_case("tasks"))
+        && bundle.parent() == Some(drive)
+        && bundle.file_name().is_some_and(|n| n.to_string_lossy().starts_with("CHROMARCH-"))
+}
 fn doc_path(root: &str, s: &str) -> Result<PathBuf> {
     let p = Path::new(s);
+    if p.is_absolute() && external_task_doc(root, p) {
+        return Ok(p.to_owned());
+    }
     if p.is_absolute()
         || p.components().any(|c| {
             !matches!(
@@ -1602,6 +1626,22 @@ mod tests {
         assert_eq!(decode(&escape(s)), s);
         assert!(markdown_preview::Preview::document("# 結果\n- [x] OK",6000).rtf.contains("\\b\\fs34"));
         assert!(doc_path("D:\\work", "../private.md").is_err());
+    }
+    #[test]
+    fn chromarch_tasks_open_their_sheets_in_the_bundle() {
+        let chromarch = r"Z:\.company\dots\game_creator\TurfWars";
+        for ok in [r"Z:\CHROMARCH-Shibuya-LocalBundle-20261117\tasks\Q302.md",
+                   r"Z:\CHROMARCH-Shibuya-LocalBundle-20261117\QUEUE-ALL-CITIES-Q302-Q324-20261118.md"] {
+            assert_eq!(doc_path(chromarch, ok).unwrap(), PathBuf::from(ok));
+        }
+        for ng in [r"Z:\CHROMARCH-Shibuya-LocalBundle-20261117\tasks\notes.md",
+                   r"Z:\CHROMARCH-Shibuya-LocalBundle-20261117\tasks\Q302.txt",
+                   r"Z:\CHROMARCH-Shibuya-LocalBundle-20261117\outputs\tasks\Q302.md",
+                   r"Z:\other\tasks\Q302.md",
+                   r"Z:\CHROMARCH-Shibuya-LocalBundle-20261117\tasks\..\..\secret\Q302.md"] {
+            assert!(doc_path(chromarch, ng).is_err(), "{ng}");
+        }
+        assert!(doc_path(r"Z:\.company\eda", r"Z:\CHROMARCH-Shibuya-LocalBundle-20261117\tasks\Q302.md").is_err());
     }
 }
 mod task_counts;
