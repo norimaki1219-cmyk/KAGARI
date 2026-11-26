@@ -1,0 +1,41 @@
+{
+  "color": {
+    "background": "#F5F7FA",
+    "surface": "#FFFFFF",
+    "text": "#182532",
+    "muted": "#5C6A79",
+    "border": "#DCE3E9",
+    "brand": "#006E80",
+    "brandHover": "#005869",
+    "success": "#217852",
+    "warning": "#A76617",
+    "warningSurface": "#FFF4E2",
+    "infoSurface": "#E8F4F7",
+    "shadow": "#142333"
+  },
+  "radius": {
+    "sm": 6,
+    "md": 10,
+    "lg": 14
+  },
+  "spacing": [
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    32
+  ],
+  "typography": {
+    "body": 14,
+    "small": 12,
+    "section": 16,
+    "title": 20,
+    "lineHeight": 1.6
+  },
+  "minWidths": {
+    "conversationPane": 320,
+    "twoColumnLayout": 1100
+  }
+}

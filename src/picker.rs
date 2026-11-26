@@ -85,7 +85,11 @@ extern "system" {
     fn GetOpenFileNameW(info: *mut OpenFileName) -> i32;
     fn CommDlgExtendedError() -> u32;
 }
+#[cfg(test)]
+thread_local! { pub(super) static TEST_IMAGE: RefCell<Option<PathBuf>> = const { RefCell::new(None) }; }
 pub fn image(owner: H) -> Result<Option<PathBuf>> {
+    #[cfg(test)]
+    if let Some(path) = TEST_IMAGE.with(|slot| slot.borrow_mut().take()) { return Ok(Some(path)); }
     let filter = wide("画像 (PNG・JPEG・GIF・WebP)\0*.png;*.jpg;*.jpeg;*.gif;*.webp\0");
     let title = wide("依頼に添付する画像");
     let mut path = vec![0u16; 32768];

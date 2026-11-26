@@ -26,11 +26,24 @@ try {
   $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
   try{$token=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)}finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)}
  }
- $body=@{channel=$channel;text=$text;unfurl_links=$false;unfurl_media=$false} | ConvertTo-Json -Compress
+ $payload=@{channel=$channel;text=$text;unfurl_links=$false;unfurl_media=$false}
+ $thread=$env:KAGARI_SLACK_THREAD
+ if($thread){
+  if($thread -cmatch '^https://[a-zA-Z0-9.-]+\.slack\.com/archives/([CG][A-Z0-9]+)/p(\d{10})(\d{6})(?:\?([^#]*))?(?:#.*)?$'){
+   if($Matches[1] -cne $channel){throw 'スレッドと選択したチャンネルが一致しません。'}
+   $query=$Matches[4]
+   $thread=$Matches[2]+'.'+$Matches[3]
+   if($query -match '(?:^|&)thread_ts=([^&]*)'){$thread=[Uri]::UnescapeDataString($Matches[1])}
+  }
+  if($thread -cnotmatch '^\d{10}\.\d{6}$'){throw '返信先はSlackの投稿リンクまたは親投稿のtsを入力してください。'}
+  $payload.thread_ts=$thread
+ }
+ $body=$payload | ConvertTo-Json -Compress
  [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
  try{
   $result=Invoke-RestMethod -Method Post -Uri 'https://slack.com/api/chat.postMessage' -MaximumRedirection 0 -TimeoutSec 20 -Headers @{Authorization="Bearer $token"} -ContentType 'application/json; charset=utf-8' -Body $utf.GetBytes($body)
  }catch{throw '送信結果を確認できません。再送前にSlackを確認してください。'}
  if(!$result.ok){throw ("Slack: "+$result.error)}
  if(!$result.ts -or $result.channel -cne $channel){throw '送信結果を確認できません。Slackを確認してください。'}
+ [Console]::Write($result.channel+' / '+$result.ts)
 }catch{[Console]::Write($_.Exception.Message);exit 1}

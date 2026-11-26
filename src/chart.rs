@@ -1,24 +1,20 @@
 use super::*;
-use std::collections::BTreeMap;
 const ID: i32 = 155;
-pub const COLORS: [u32; 4] = [0x766959, 0xa35816, 0x12508d, 0x48702a];
+pub const COLORS: [u32; 5] = [0x766959, 0xa35816, 0x12508d, 0x48702a, 0x90466b];
 #[derive(Clone)]
 struct Row {
     name: String,
-    counts: [usize; 4],
+    counts: [usize; 5],
 }
 thread_local! {static ROWS:RefCell<Vec<Row>>=RefCell::default();}
 fn aggregate(a: &App) -> Vec<Row> {
-    let mut groups: BTreeMap<_, _> = a.projects.iter().cloned().map(|p| (p, [0; 4])).collect();
-    for t in &a.tasks {
-        if let Some(counts) = groups.get_mut(&t.project) {
-            counts[t.status] += 1;
-        }
-    }
-    groups
-        .into_iter()
-        .map(|(name, counts)| Row { name, counts })
-        .collect()
+    let (counts, _) = task_counts::task_counts(&a.tasks);
+    let mut rows: Vec<_> = a.projects.iter().map(|name| Row {
+        counts: counts.get(name.as_str()).copied().unwrap_or_default(),
+        name: name.clone(),
+    }).collect();
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
+    rows
 }
 fn label(r: &Row) -> &str {
     Path::new(&r.name).file_name().and_then(|s| s.to_str()).unwrap_or(&r.name)
@@ -40,12 +36,13 @@ pub fn update(h: H, a: &App) {
     msg(h, ID, 0x1a0, 0, unit.bottom.max(16) as _);
     for (i, r) in rows.iter().enumerate() {
         let desc = format!(
-            "{}　未着手 {}　作業中 {}　確認待ち {}　完了 {}",
+            "{}　未着手 {}　作業中 {}　確認待ち {}　完了 {}　次の作業依頼待ち {}",
             label(r),
             r.counts[0],
             r.counts[1],
             r.counts[2],
-            r.counts[3]
+            r.counts[3],
+            r.counts[4]
         );
         msg(h, ID, 0x180, 0, wide(&desc).as_ptr() as _);
         if a.projects.get(a.project) == Some(&r.name)
@@ -182,7 +179,7 @@ pub fn draw(l: isize) {
             }
             start = next;
         }
-        let cell = (r.right - end) / 5;
+        let cell = (r.right - end) / (COLORS.len() as i32 + 1);
         for (k, n) in row.counts.iter().chain(std::iter::once(&total)).enumerate() {
             text(
                 d.dc,
@@ -192,7 +189,7 @@ pub fn draw(l: isize) {
                     ..r
                 },
                 &n.to_string(),
-                if k < 4 { COLORS[k] } else { 0x45382e },
+                COLORS.get(k).copied().unwrap_or(0x45382e),
                 1,
             );
         }

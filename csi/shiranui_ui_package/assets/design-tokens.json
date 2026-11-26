@@ -1,0 +1,46 @@
+{
+  "name": "SHIRANUI Console UI refresh",
+  "version": "1.0.0",
+  "colors": {
+    "canvas": "#f4f7fa",
+    "surface": "#ffffff",
+    "ink": "#182839",
+    "muted": "#66788b",
+    "border": "#dfe7ee",
+    "brand": "#076d77",
+    "brandTint": "#e8f5f5",
+    "critical": "#c43e38",
+    "criticalTint": "#fff0ee",
+    "warning": "#a9650a",
+    "warningTint": "#fff6e7",
+    "ok": "#16734d",
+    "okTint": "#ecf8f2",
+    "sidebar": "#182630",
+    "darkGraph": "#12212d"
+  },
+  "radius": {
+    "card": 12,
+    "control": 8
+  },
+  "spacingScalePx": [
+    4,
+    8,
+    12,
+    16,
+    24,
+    32
+  ],
+  "typography": {
+    "family": "Segoe UI, Yu Gothic UI, Meiryo, sans-serif",
+    "body": 13,
+    "caption": 11,
+    "section": 15,
+    "kpi": 28
+  },
+  "layout": {
+    "sidebarWidthPx": 68,
+    "detailsMinWidthPx": 390,
+    "tableMinWidthPx": 540,
+    "headerHeightPx": 62
+  }
+}

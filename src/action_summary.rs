@@ -5,6 +5,92 @@ pub struct Reply {
     pub previous: String,
 }
 
+#[derive(Default)]
+pub(super) struct Overview {
+    pub text: String,
+    // Summary and original ranges use Rich Edit UTF-16 paragraph positions.
+    pub links: Vec<(i32, i32, (i32, i32))>,
+}
+
+pub(super) fn overview(text: &str, questions: &[super::decisions::Question], answered: &[bool]) -> Overview {
+    let mut groups: [Vec<_>;5] = Default::default();
+    let mut explicit_steps = Vec::new();
+    let mut in_next_steps = false;
+    let mut section = None;
+    let mut fence = None;
+    let mut offset = 0;
+    let mut questions = questions.iter().enumerate().peekable();
+    for (index, raw) in text.lines().enumerate() {
+        let end = offset + raw.encode_utf16().count() as i32;
+        let source = (offset, end);
+        offset = end + 1;
+        let trim = raw.trim();
+        if trim.starts_with("```") || trim.starts_with("~~~") {
+            let marker = trim.as_bytes()[0];
+            let size = trim.bytes().take_while(|b| *b == marker).count();
+            if fence.is_none() { fence = Some((marker, size)); }
+            else if fence.is_some_and(|(c,n)| c == marker && size >= n) && trim[size..].trim().is_empty() { fence = None; }
+            continue;
+        }
+        if questions.peek().is_some_and(|(_,q)| q.line == index) {
+            let (i,q) = questions.next().unwrap();
+            let state = if answered.get(i) == Some(&true) { "回答済み" } else { "未回答" };
+            groups[1].push((format!("【{state}】{}", q.title), source));
+            continue;
+        }
+        if fence.is_some() || trim.is_empty() || trim.starts_with(['>', '|']) { continue; }
+        let line = clean(trim);
+        let heading = line.trim_end_matches([':', '：']).trim();
+        let category = match heading {
+            "完了事項" | "完了したこと" | "実装内容" | "対応内容" | "変更内容" => Some(0),
+            "検証結果" | "確認結果" | "今回の確認・検証" | "今回の実施内容・検証結果" => Some(3),
+            "警告" | "注意点" | "残件と理由" => Some(4),
+            "次の依頼" | "次のアクション" | "次のステップ" | "残作業" | "次にすること" | "Next steps" => Some(2),
+            _ => None,
+        };
+        if category.is_some() || trim.starts_with('#') || matches!(heading,"利用者が決めること"|"決めること") || (trim.starts_with("**") && trim.ends_with("**")) {
+            in_next_steps = matches!(heading,"次にすること" | "次のアクション" | "次のステップ" | "Next steps");
+            section = category;
+            continue;
+        }
+        let item = line.trim_start_matches("- ").trim_start_matches("* ").trim_start_matches("+ ");
+        let group = if item.starts_with("[x]") { Some(0) }
+            else if item.starts_with("[ ]") { Some(2) }
+            else if section.is_some() { section }
+            else if has(item, &["完了しました", "実装しました", "修正しました", "追加しました", "確認しました", "対応済み"]) { Some(0) }
+            else if item.starts_with("次は") || item.starts_with("次に") || item.ends_with("してください。") { Some(2) }
+            else { None };
+        if let Some(group) = group {
+            if in_next_steps && group == 2 { explicit_steps.push((item.to_owned(), source)); }
+            else { groups[group].push((item.to_owned(), source)); }
+        }
+    }
+    if !explicit_steps.is_empty() { groups[2] = explicit_steps; }
+    let mut overview = Overview::default();
+    let mut at = 0;
+    let [done,questions,next,verified,warnings] = groups;
+    for (heading,items) in [("完了事項",done),("検証結果",verified),("注意点・残件",warnings),("利用者が決めること",questions),("次にすること",next)] {
+        if items.is_empty() && matches!(heading,"検証結果"|"注意点・残件"){continue;}
+        overview.text.push_str(heading);
+        overview.text.push('\n');
+        at += heading.encode_utf16().count() as i32 + 1;
+        if items.is_empty() {
+            overview.text.push_str("記載なし\n");
+            at += "記載なし\n".encode_utf16().count() as i32;
+        }
+        for (label, source) in items {
+            let end = at + label.encode_utf16().count() as i32;
+            overview.links.push((at, end, source));
+            overview.text.push_str(&label);
+            overview.text.push('\n');
+            at = end + 1;
+        }
+        overview.text.push('\n');
+        at += 1;
+    }
+    overview
+}
+
 fn has(text: &str, words: &[&str]) -> bool {
     words.iter().any(|word| text.contains(word))
 }
@@ -15,6 +101,8 @@ fn clean(line: &str) -> String {
 
 fn extract(text: &str) -> Vec<String> {
     let mut actions = Vec::new();
+    let mut concrete = Vec::new();
+    let mut next_section = false;
     let mut section = false;
     let mut in_code = false;
     for raw in text.lines() {
@@ -45,11 +133,13 @@ fn extract(text: &str) -> Vec<String> {
             && !heading.contains(['。', '：', ':'])
         {
             section = true;
+            next_section = matches!(heading,"次にすること" | "次のアクション" | "次のステップ" | "Next steps" | "Next actions");
             continue;
         }
         if is_heading || line.is_empty() {
             if is_heading {
                 section = false;
+                next_section = false;
             }
             if line.is_empty() {
                 continue;
@@ -65,7 +155,9 @@ fn extract(text: &str) -> Vec<String> {
         if item.is_empty() {
             continue;
         }
-        if section || item.starts_with("[ ]") || has(item, &["優先1", "優先2", "優先3"]) {
+        if next_section {
+            concrete.push(item.trim_start_matches("[ ]").trim().to_string());
+        } else if section || item.starts_with("[ ]") || has(item, &["優先1", "優先2", "優先3"]) {
             actions.push(item.trim_start_matches("[ ]").trim().to_string());
         } else {
             for sentence in item.split_inclusive(['。', '！', '？']) {
@@ -97,6 +189,20 @@ fn extract(text: &str) -> Vec<String> {
             }
         }
     }
+    if !concrete.is_empty() { return concrete; }
+    // Surface priorities and blockers before the detailed implementation instructions.
+    actions.sort_by_key(|s| {
+        if has(s, &["優先1", "優先2", "優先3"]) {
+            0
+        } else if has(
+            s,
+            &["未確認", "承認待ち", "指示を待", "対応は不要", "対応不要"],
+        ) {
+            1
+        } else {
+            2
+        }
+    });
     actions
 }
 
@@ -178,19 +284,6 @@ pub fn summary(reply: &Reply) -> String {
         }
         .into();
     }
-    // Surface priorities and blockers before the detailed implementation instructions.
-    actions.sort_by_key(|s| {
-        if has(s, &["優先1", "優先2", "優先3"]) {
-            0
-        } else if has(
-            s,
-            &["未確認", "承認待ち", "指示を待", "対応は不要", "対応不要"],
-        ) {
-            1
-        } else {
-            2
-        }
-    });
     let mut lines = Vec::new();
     for action in actions {
         let mut chars = action.chars();
@@ -229,6 +322,11 @@ mod tests {
         let reply=Reply{time:0,previous:String::new(),text:"ファイルを確認しました。\n内容は一致しています。\n- そのため、次の3つが残っています。\n  1. 記録\n  2. 更新\n  3. 共有\n\n## 別の話題".into()};
         let view=conversation(&reply);
         assert!(view.contains("1. 記録\n  2. 更新\n  3. 共有"));
+    }
+    #[test]
+    fn explicit_next_steps_precede_residual_observations() {
+        let result=run("画面は未確認です。\n## 次にすること\n- AI：対象の画面を開き、履歴が描画されることを確認する。\n- 管理者：権限を確認する。",""); 
+        assert!(result.contains("画面を開き") && result.contains("管理者") && !result.contains("未確認"));
     }
     #[test]
     fn wait_is_an_action_and_does_not_revive_old_work() {

@@ -1,13 +1,18 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="KAGARI — ワークスペース" Width="1220" Height="792" MinWidth="810" MinHeight="560" WindowStartupLocation="CenterScreen" FontFamily="Yu Gothic UI" FontSize="15" Background="{DynamicResource WorkspaceCanvas}" Foreground="{DynamicResource TextPrimary}" UseLayoutRounding="True">
 <Window.Resources>
- <SolidColorBrush x:Key="WorkspaceCanvas" Color="#EFF3F2"/>
+ <DrawingImage x:Key="ProjectFolderIcon">
+  <DrawingImage.Drawing>
+   <GeometryDrawing Brush="White" Geometry="M1,5 Q1,3 3,3 L9,3 12,6 21,6 Q23,6 23,8 L12,8 10,9.5 1,9.5 Z M1,11 L10.5,11 12.5,9.5 23,9.5 23,18 Q23,20 21,20 L3,20 Q1,20 1,18 Z"/>
+  </DrawingImage.Drawing>
+ </DrawingImage>
+ <SolidColorBrush x:Key="WorkspaceCanvas" Color="#F5F1EC"/>
  <SolidColorBrush x:Key="Surface" Color="#FFFFFF"/>
  <SolidColorBrush x:Key="TextPrimary" Color="#20323B"/>
  <SolidColorBrush x:Key="TextSecondary" Color="#51666E"/>
  <SolidColorBrush x:Key="ActionPrimary" Color="#08655F"/>
  <SolidColorBrush x:Key="Selection" Color="#DCECE8"/>
  <SolidColorBrush x:Key="FocusRing" Color="#1C62AA"/>
- <SolidColorBrush x:Key="Separator" Color="#C8D6D7"/>
+ <SolidColorBrush x:Key="Separator" Color="#D8D2CC"/>
  <SolidColorBrush x:Key="TaskPending" Color="#677680"/>
  <SolidColorBrush x:Key="TaskWorking" Color="#15738B"/>
  <SolidColorBrush x:Key="TaskReview" Color="#935108"/>
@@ -22,18 +27,346 @@
  <Geometry x:Key="IconProject">M2,7 L9,7 L11,10 L22,10 L22,20 L2,20 Z</Geometry>
  <Geometry x:Key="IconTrend">M3,3 L3,21 L22,21 M7,18 L7,13 M12,18 L12,8 M17,18 L17,4</Geometry>
 
+ <Style TargetType="TextBox">
+  <Setter Property="Background" Value="White"/><Setter Property="BorderBrush" Value="#958D86"/>
+  <Setter Property="BorderThickness" Value="1"/><Setter Property="Padding" Value="5,3"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TextBox">
+   <Border x:Name="Field" CornerRadius="6" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}">
+    <ScrollViewer Name="PART_ContentHost" Focusable="False"/>
+   </Border>
+   <ControlTemplate.Triggers>
+    <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="Field" Property="BorderBrush" Value="{StaticResource FocusRing}"/></Trigger>
+    <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Field" Property="Opacity" Value=".55"/></Trigger>
+   </ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
  <Style TargetType="Button"><Setter Property="Padding" Value="11,6"/><Setter Property="Margin" Value="2"/><Setter Property="Background" Value="#E3EEF0"/><Setter Property="Foreground" Value="#253C48"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Cursor" Value="Hand"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border x:Name="B" Background="{TemplateBinding Background}" CornerRadius="5" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="B" Property="Opacity" Value=".80"/></Trigger><Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="B" Property="BorderBrush" Value="{StaticResource FocusRing}"/><Setter TargetName="B" Property="BorderThickness" Value="2"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter TargetName="B" Property="Opacity" Value=".45"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
  <Style x:Key="card" TargetType="Border"><Setter Property="Background" Value="White"/><Setter Property="CornerRadius" Value="8"/><Setter Property="BorderBrush" Value="{StaticResource Separator}"/><Setter Property="BorderThickness" Value="1"/><Setter Property="Padding" Value="14"/></Style>
+ <Style x:Key="ApprovalDeny" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+  <Setter Property="Background" Value="#F6E9E6"/>
+  <Setter Property="Foreground" Value="#843C2D"/>
+ </Style>
+ <Style x:Key="ApprovalDetails" TargetType="Expander">
+  <Setter Property="Header" Value="詳細を表示"/>
+  <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+  <Setter Property="FontSize" Value="13"/>
+  <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+  <Style.Triggers>
+   <Trigger Property="IsExpanded" Value="True"><Setter Property="Header" Value="詳細を閉じる"/></Trigger>
+  </Style.Triggers>
+ </Style>
+ <Style x:Key="ProjectCardButton" TargetType="Button">
+  <Setter Property="Margin" Value="0"/><Setter Property="Padding" Value="0"/>
+  <Setter Property="Foreground" Value="#253C48"/><Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="HorizontalContentAlignment" Value="Center"/>
+  <Setter Property="VerticalContentAlignment" Value="Center"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+   <Border x:Name="ActionSurface" Background="Transparent" BorderBrush="Transparent" BorderThickness="2" CornerRadius="5" Padding="{TemplateBinding Padding}">
+    <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+   </Border>
+   <ControlTemplate.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ActionSurface" Property="Background" Value="#11253C48"/></Trigger>
+    <Trigger Property="IsPressed" Value="True"><Setter TargetName="ActionSurface" Property="Background" Value="#22253C48"/></Trigger>
+    <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="ActionSurface" Property="BorderBrush" Value="{StaticResource FocusRing}"/></Trigger>
+   </ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
+ <Style x:Key="RailButton" TargetType="Button">
+  <Setter Property="Width" Value="52"/><Setter Property="Height" Value="46"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+   <Grid Background="Transparent">
+    <Border x:Name="Tile" Width="38" Height="38" CornerRadius="19" BorderThickness="1"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+    <Border x:Name="Marker" HorizontalAlignment="Left" Width="3" Height="24" CornerRadius="1" Background="#FFAA39" Visibility="Hidden"/>
+   </Grid>
+   <ControlTemplate.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Tile" Property="Background" Value="#494443"/></Trigger>
+    <Trigger Property="Selector.IsSelected" Value="True"><Setter TargetName="Tile" Property="Background" Value="#93410C"/><Setter TargetName="Marker" Property="Visibility" Value="Visible"/></Trigger>
+    <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Tile" Property="BorderBrush" Value="White"/></Trigger>
+    <Trigger Property="IsPressed" Value="True"><Setter TargetName="Tile" Property="Background" Value="#733207"/></Trigger>
+   </ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
 </Window.Resources>
-<DockPanel><Border DockPanel.Dock="Top" Background="#172B37" Padding="14,7"><DockPanel LastChildFill="False"><StackPanel Orientation="Horizontal" DockPanel.Dock="Left"><Button Name="About" Background="Transparent" Padding="3" Margin="0,0,10,0" ToolTip="バージョンと仕様" AutomationProperties.Name="バージョンと仕様"><Image Name="Logo" Width="28" Height="28"/></Button><Menu VerticalAlignment="Center" Background="#172B37" Foreground="#B6C6CF"><MenuItem Header="ファイル" Foreground="#C3D1D9"><MenuItem Header="プロジェクトを追加" Tag="127" Foreground="Black"/><MenuItem Header="終了" Tag="exit" Foreground="Black"/></MenuItem><MenuItem Header="実行" Foreground="#C3D1D9"><MenuItem Header="AIに依頼" Tag="115" Foreground="Black"/><MenuItem Header="セッション履歴" Tag="190" Foreground="Black"/><MenuItem Header="KAGARI自身の改善" Tag="192" Foreground="Black"/><MenuItem Header="PowerShell" Tag="116" Foreground="Black"/><MenuItem Header="SHIRANUI ログ" Tag="log" Foreground="Black"/></MenuItem></Menu></StackPanel><StackPanel DockPanel.Dock="Right" Orientation="Horizontal"><Grid><TextBox Name="Search" Width="175" Padding="7,4" ToolTip="タスク名で検索" VerticalContentAlignment="Center"/><TextBlock Name="SearchHint" Foreground="#536975" Text="タスク検索　 Ctrl＋F" Margin="9,0" VerticalAlignment="Center" IsHitTestVisible="False"/></Grid><Button Name="Layout" Content="&#xE89F;" FontFamily="Segoe MDL2 Assets" ToolTip="ペインのレイアウト"/><Button Name="SharedProgress" Tag="103" Content="共有進捗"/></StackPanel></DockPanel></Border>
-<Border DockPanel.Dock="Left" Background="#203846" Padding="4,10"><StackPanel Name="Rail"/></Border>
-<Grid Name="Workspace" Margin="10"><Grid.ColumnDefinitions><ColumnDefinition Width="205" MinWidth="0"/><ColumnDefinition Width="6"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-<Border Name="Side" Style="{StaticResource card}" Padding="8"><DockPanel><DockPanel DockPanel.Dock="Top" Margin="4,2,0,9"><Button Name="AddProject" DockPanel.Dock="Right" Tag="127" Content="＋" ToolTip="プロジェクトを追加"/><TextBlock VerticalAlignment="Center" FontWeight="Bold" Text="エクスプローラー" FontSize="18" Foreground="#23597B"/></DockPanel><TreeView Name="Tree" BorderThickness="0" HorizontalContentAlignment="Stretch"/></DockPanel></Border>
+<DockPanel><Border DockPanel.Dock="Top" Background="#272627" Padding="14,7" BorderBrush="#FFA331" BorderThickness="0,0,0,2"><DockPanel LastChildFill="False"><StackPanel Orientation="Horizontal" DockPanel.Dock="Left"><Button Name="About" Background="Transparent" Padding="3" Margin="0,0,10,0" ToolTip="バージョンと仕様" AutomationProperties.Name="バージョンと仕様"><Image Name="Logo" Width="36" Height="36" Clip="M18,0 A18,18 0 1 1 17.99,0 Z"/></Button><Menu VerticalAlignment="Center" Background="#272627" Foreground="#EFEAE5"><MenuItem Header="ファイル" Foreground="#EFEAE5"><MenuItem Header="プロジェクトを追加" Tag="127" Foreground="Black"/><MenuItem Header="終了" Tag="exit" Foreground="Black"/></MenuItem><MenuItem Header="実行" Foreground="#EFEAE5"><MenuItem Header="AIに依頼" Tag="115" Foreground="Black"/><MenuItem Header="AIニュース" Tag="news" Foreground="Black"/><MenuItem Header="セッション履歴" Tag="190" Foreground="Black"/><MenuItem Header="KAGARI自身の改善" Tag="192" Foreground="Black"/><MenuItem Header="PowerShell" Tag="116" Foreground="Black"/><MenuItem Header="SHIRANUI" Tag="guard" Foreground="Black"/><MenuItem Header="SHIRANUI ログ" Tag="log" Foreground="Black"/></MenuItem></Menu></StackPanel><StackPanel DockPanel.Dock="Right" Orientation="Horizontal"><Grid><TextBox Name="Search" Width="175" Padding="7,4" ToolTip="タスク名で検索" VerticalContentAlignment="Center"/><TextBlock Name="SearchHint" Foreground="#536975" Text="タスク検索　 Ctrl＋F" Margin="9,0" VerticalAlignment="Center" IsHitTestVisible="False"/></Grid><Button Name="Layout" Content="&#xE89F;" FontFamily="Segoe MDL2 Assets" ToolTip="ペインのレイアウト"/></StackPanel></DockPanel></Border>
+<Border DockPanel.Dock="Left" Background="#323032" Padding="0,8"><StackPanel Name="Rail"/></Border>
+<Grid><Grid Name="Workspace" Margin="10"><Grid.ColumnDefinitions><ColumnDefinition Width="205" MinWidth="0"/><ColumnDefinition Width="6"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+<Border Name="Side" Style="{StaticResource card}" Padding="8"><DockPanel><DockPanel DockPanel.Dock="Top" Margin="4,2,0,9"><Button Name="AddProject" DockPanel.Dock="Right" Tag="127" Content="＋" ToolTip="プロジェクトを追加"/><TextBlock VerticalAlignment="Center" FontWeight="Bold" Text="エクスプローラー" FontSize="18" Foreground="#23597B"/></DockPanel><Grid><Grid.RowDefinitions><RowDefinition Height="2*"/><RowDefinition Height="6"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+<TreeView Name="Tree" BorderThickness="0" HorizontalContentAlignment="Stretch"/>
+<GridSplitter Grid.Row="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="{StaticResource Separator}" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"/>
+<DockPanel Grid.Row="2" Margin="4,6,4,0">
+ <DockPanel DockPanel.Dock="Top">
+  <Button Name="UsageRefresh" DockPanel.Dock="Right" Content="&#xE72C;" FontFamily="Segoe MDL2 Assets" MinWidth="32" ToolTip="Claude Codeの使用枠を照会し、使用状況を再読み込み" AutomationProperties.Name="AI使用状況を更新" VerticalAlignment="Center"/>
+  <Border Name="UsageMessage" DockPanel.Dock="Right" VerticalAlignment="Center"/>
+  <TextBlock Style="{StaticResource SectionHeading}" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"><Run Text="AI使用状況"/><Run Text=" "/><InlineUIContainer x:Name="UsageClock" BaselineAlignment="Center"/><Run x:Name="UsageTimestamp" ToolTip="最新取得" Text="—" FontSize="13" FontWeight="Normal" Foreground="{StaticResource TextSecondary}"/></TextBlock>
+ </DockPanel>
+ <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"><StackPanel Name="UsageRows"/></ScrollViewer>
+</DockPanel></Grid></DockPanel></Border>
 <GridSplitter Name="SideGrip" Grid.Column="1" Width="5" HorizontalAlignment="Stretch" Background="Transparent" ResizeBehavior="PreviousAndNext"/>
 <Grid Grid.Column="2"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-<Border Name="Kpi" Style="{StaticResource card}" Margin="0,0,0,7"><DockPanel><DockPanel DockPanel.Dock="Top" Margin="0,0,0,8"><TextBlock Name="ProjectLabel" DockPanel.Dock="Right" HorizontalAlignment="Right" Foreground="#52717C"/><TextBlock Text="プロジェクト別の進捗" Style="{StaticResource SectionHeading}"/></DockPanel><UniformGrid Name="Metrics" DockPanel.Dock="Bottom" Columns="4" Margin="0,7,0,0"/><DockPanel><WrapPanel Name="ChartLegend" DockPanel.Dock="Top"/><ScrollViewer MaxHeight="165" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"><WrapPanel Name="Chart"/></ScrollViewer></DockPanel></DockPanel></Border>
+<Border Name="Kpi" Style="{StaticResource card}" Margin="0,0,0,7"><DockPanel><DockPanel DockPanel.Dock="Top" Margin="0,0,0,8"><Button Name="GuardProject" DockPanel.Dock="Right" Content="監視・アラート" Tag="guard" Visibility="Collapsed"/><TextBlock Name="ProjectLabel" DockPanel.Dock="Right" HorizontalAlignment="Right" Foreground="#52717C"/><TextBlock Text="プロジェクト別の進捗" Style="{StaticResource SectionHeading}"/></DockPanel><UniformGrid Name="Metrics" DockPanel.Dock="Bottom" Columns="4" Margin="0,7,0,0"/><DockPanel><WrapPanel Name="ChartLegend" DockPanel.Dock="Top"/><ScrollViewer MaxHeight="165" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"><WrapPanel Name="Chart"/></ScrollViewer></DockPanel></DockPanel></Border>
 <Grid Grid.Row="1" Name="Panes"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="6"/><ColumnDefinition/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition/><RowDefinition Height="0"/><RowDefinition Height="0"/></Grid.RowDefinitions>
-<Border Name="Queue" Style="{StaticResource card}"><DockPanel><DockPanel DockPanel.Dock="Top" Margin="0,0,0,8"><Button Name="NewTask" DockPanel.Dock="Right" Tag="113" Content="新規" Background="#D9EAF6" Foreground="#174F73"/><TextBlock Text="作業キュー" Style="{StaticResource SectionHeading}" VerticalAlignment="Center"/></DockPanel><WrapPanel DockPanel.Dock="Top"><WrapPanel Name="AgentFilters" Margin="0,0,0,8" VerticalAlignment="Center"/><Button Name="ResetFilters" Tag="709" Padding="7,3" VerticalAlignment="Top" Content="絞り込みを解除"/></WrapPanel><WrapPanel DockPanel.Dock="Bottom" Margin="0,7,0,0"><Button Name="Ask" ToolTip="依頼内容を入力する画面を開く" Tag="115" Content="タスク詳細・依頼" Style="{StaticResource PrimaryAction}"/><Button Background="#DDEFE4" Foreground="#205C3A" Name="Advance" ToolTip="選択中のタスクを、ボタンに表示された状態に変更する" Tag="156" Content="作業を開始"/><Button Name="Pin" Tag="159" Content="☆" ToolTip="選択中のタスクを作業キューの上部に固定する・固定を解除する"/><Button Name="Details" Visibility="Collapsed" ToolTip="タスクのサマリ、設定、依頼履歴を確認する" Tag="160" Content="詳細"/></WrapPanel><Grid><ListBox Name="Tasks" BorderThickness="0" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled"/><StackPanel Name="EmptyPanel" VerticalAlignment="Center" HorizontalAlignment="Center"><TextBlock Name="Empty" Text="表示するタスクがありません" Foreground="#657985" VerticalAlignment="Center" HorizontalAlignment="Center" IsHitTestVisible="False"/><Button Name="EmptyAction" Margin="4,10" HorizontalAlignment="Center"/></StackPanel></Grid></DockPanel></Border>
-<GridSplitter Name="Grip" Grid.Column="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#CFDADD" ResizeBehavior="PreviousAndNext"/>
-<Border Name="Docs" Grid.Column="2" Style="{StaticResource card}"><DockPanel><DockPanel DockPanel.Dock="Top"><Button Name="OpenDocument" DockPanel.Dock="Right" Content="Markdownを開く"/><TextBlock Text="タスク資料" Style="{StaticResource SectionHeading}" Margin="0,0,0,9"/></DockPanel><WrapPanel DockPanel.Dock="Top" Name="Tabs"/><Button DockPanel.Dock="Bottom" Name="Attach" Tag="181" Content="タスクに関連付け"/><TextBlock DockPanel.Dock="Top" Name="FileName" Foreground="#637985" Margin="2,7" TextTrimming="CharacterEllipsis"/><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><DockPanel Name="DocumentOutline" Visibility="Collapsed"><TextBlock DockPanel.Dock="Top" Text="目次" FontWeight="SemiBold" Margin="4,0,4,4"/><ListBox Name="DocumentHeadings" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto"/></DockPanel><RichTextBox Grid.Column="1" Name="Preview" IsReadOnly="True" VerticalScrollBarVisibility="Auto" BorderThickness="0"/><ScrollViewer Grid.ColumnSpan="2" Name="ExplorerPreview" Visibility="Collapsed" Background="White" Padding="4" VerticalScrollBarVisibility="Auto"/></Grid></DockPanel></Border>
-</Grid></Grid></Grid></DockPanel></Window>
+<ScrollViewer Name="QueueColumn" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+<Grid Name="QueueStack" MinHeight="245"><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+<Border Name="Queue" Style="{StaticResource card}"><DockPanel><DockPanel DockPanel.Dock="Top" Margin="0,0,0,8"><Button Name="NewTask" DockPanel.Dock="Right" Tag="113" Content="新規" Background="#D9EAF6" Foreground="#174F73"/><TextBlock Text="作業キュー" Style="{StaticResource SectionHeading}" VerticalAlignment="Center"/></DockPanel>
+<DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+ <Label DockPanel.Dock="Left" Content="状態" Target="{Binding ElementName=QueueFilter}" Padding="0,0,8,0" VerticalAlignment="Center"/>
+ <ComboBox Name="QueueFilter" AutomationProperties.Name="作業キューの状態" HorizontalAlignment="Left" MinWidth="126" MinHeight="28" VerticalContentAlignment="Center">
+  <ComboBoxItem Content="すべて"/>
+  <ComboBoxItem Content="作業中"/>
+  <ComboBoxItem Content="AI実施中"/>
+  <ComboBoxItem Content="回答確認中"/>
+ </ComboBox>
+</DockPanel>
+<StackPanel DockPanel.Dock="Top" Name="QueueResults" Visibility="Collapsed" Margin="0,0,0,6"><ComboBox Name="QueueBatches" ToolTip="保存した作業キューの登録結果"/><TextBlock Name="QueueCounts" TextWrapping="Wrap"/><Button Name="ViewRegistered" HorizontalAlignment="Left" Content="登録したタスクを見る"/></StackPanel><WrapPanel DockPanel.Dock="Top"><WrapPanel Name="AgentFilters" Margin="0,0,0,8" VerticalAlignment="Center"/><Button Name="ResetFilters" Tag="709" Padding="7,3" VerticalAlignment="Top" Content="絞り込みを解除"/></WrapPanel><WrapPanel DockPanel.Dock="Bottom" Margin="0,7,0,0"><Button Name="Ask" ToolTip="依頼内容を入力する画面を開く" Tag="115" Content="タスク詳細・依頼" Style="{StaticResource PrimaryAction}"/><Button Background="#DDEFE4" Foreground="#205C3A" Name="Advance" ToolTip="選択中のタスクを、ボタンに表示された状態に変更する" Tag="156" Content="作業を開始"/><Button Name="Pin" Tag="159" Content="☆" ToolTip="選択中のタスクを作業キューの上部に固定する・固定を解除する"/><Button Name="Details" Visibility="Collapsed" ToolTip="タスクのサマリ、設定、依頼履歴を確認する" Tag="160" Content="詳細"/></WrapPanel><Grid><ListBox Name="Tasks" BorderThickness="0" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled"/><StackPanel Name="EmptyPanel" VerticalAlignment="Center" HorizontalAlignment="Center"><TextBlock Name="Empty" Text="表示するタスクがありません" Foreground="#657985" VerticalAlignment="Center" HorizontalAlignment="Center" IsHitTestVisible="False"/><Button Name="EmptyAction" Margin="4,10" HorizontalAlignment="Center"/></StackPanel></Grid></DockPanel></Border>
+<Border Name="ApprovalPane" Style="{StaticResource card}" Grid.Row="1" Margin="0,6,0,0" Padding="10,6">
+ <DockPanel>
+  <WrapPanel DockPanel.Dock="Top" VerticalAlignment="Center">
+   <TextBlock Text="コマンドの承認待ち" Style="{StaticResource SectionHeading}"/>
+   <TextBlock Name="ApprovalCount" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource TextSecondary}"/>
+  </WrapPanel>
+  <TextBlock Name="ApprovalNotice" DockPanel.Dock="Top" Foreground="#8A461C" TextWrapping="Wrap">
+   <TextBlock.Style>
+    <Style TargetType="TextBlock">
+     <Style.Triggers><Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed"/></Trigger></Style.Triggers>
+    </Style>
+   </TextBlock.Style>
+  </TextBlock>
+  <ListBox Name="ApprovalList" MaxHeight="200" Visibility="Collapsed" BorderThickness="0" HorizontalContentAlignment="Stretch"
+           ScrollViewer.CanContentScroll="False" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto"
+           AutomationProperties.Name="承認待ちのコマンド"/>
+ </DockPanel>
+</Border>
+</Grid>
+</ScrollViewer>
+<GridSplitter Name="Grip" Grid.Column="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="{StaticResource Separator}" ResizeBehavior="PreviousAndNext"/>
+<Border Name="Docs" Grid.Column="2" Style="{StaticResource card}">
+ <DockPanel>
+  <DockPanel DockPanel.Dock="Top" Margin="2,0,0,6">
+   <Button Name="OpenDocument" DockPanel.Dock="Right" Content="Markdownを開く" Background="Transparent"/>
+   <TextBlock Text="タスク資料" Style="{StaticResource SectionHeading}" VerticalAlignment="Center"/>
+  </DockPanel>
+  <Border DockPanel.Dock="Top" Background="#F1F5F5" CornerRadius="6" Padding="3" Margin="0,0,0,6">
+   <WrapPanel Name="Tabs"><Button Name="ProjectHome" Content="システム構成" ToolTip="プロジェクトのメインドキュメント"/></WrapPanel>
+  </Border>
+  <Border DockPanel.Dock="Bottom" BorderBrush="#D9E3E5" BorderThickness="0,1,0,0" Padding="2,4,2,0">
+   <WrapPanel>
+    <StackPanel Name="DocumentContext">
+     <WrapPanel>
+      <Button Name="LinkedTasks" Content="関連タスク" Background="Transparent"/>
+      <Button Name="LinkedDocs" Content="関連資料" Background="Transparent"/>
+      <Button Name="DocHistory" Content="変更履歴" Background="Transparent"/>
+     </WrapPanel>
+    </StackPanel>
+    <Button Name="Attach" Tag="181" Content="タスクに関連付け"/>
+   </WrapPanel>
+  </Border>
+  <TextBlock DockPanel.Dock="Top" Name="CurrentRelation" TextWrapping="Wrap" Padding="6,3" Margin="2,1,2,3" Visibility="Collapsed"/>
+  <TextBlock DockPanel.Dock="Top" Name="FileName" Foreground="#48616C" FontSize="13" Margin="6,3" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text,RelativeSource={RelativeSource Self}}"/>
+  <Expander DockPanel.Dock="Top" Name="DocumentOutline" Header="目次" IsExpanded="False" Visibility="Collapsed" Margin="4,0,4,4" HorizontalContentAlignment="Stretch">
+   <ListBox Name="DocumentHeadings" MaxHeight="150" Margin="0,4,0,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+  </Expander>
+  <Grid><Border BorderThickness="0,1,0,0" BorderBrush="#D9E3E5">
+   <RichTextBox Name="Preview" IsReadOnly="True" IsDocumentEnabled="True" Padding="12,8" VerticalScrollBarVisibility="Auto" BorderThickness="0"/>
+  </Border><ScrollViewer Name="ExplorerPreview" Visibility="Collapsed" Background="White" Padding="4" VerticalScrollBarVisibility="Auto"/></Grid>
+ </DockPanel>
+</Border>
+</Grid></Grid></Grid>
+<Border Name="Jobs" Visibility="Collapsed" Margin="8" Padding="24" Background="#F4F6F8">
+<Border.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceDictionary Source="csi/kagari_jobs_ui/wpf/JobsResources.xaml"/></ResourceDictionary.MergedDictionaries><Style x:Key="JobsCard" TargetType="Border"><Setter Property="Background" Value="White"/><Setter Property="CornerRadius" Value="8"/><Setter Property="Padding" Value="12,8"/></Style>
+<Style x:Key="JobsCell" TargetType="TextBlock"><Setter Property="Margin" Value="7"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+</ResourceDictionary></Border.Resources>
+<DockPanel>
+ <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12"><Button Name="JobsNow" DockPanel.Dock="Right" Style="{StaticResource PrimaryAction}"><StackPanel Orientation="Horizontal"><Path Data="{StaticResource Jobs.Icon.refresh}" Style="{StaticResource Jobs.IconPath}" Stroke="White" Width="16" Margin="0,0,6,0"/><TextBlock Text="今すぐ巡回"/></StackPanel></Button><TextBlock Text="生成AI案件" FontSize="24" FontWeight="SemiBold"/></DockPanel>
+ <Border DockPanel.Dock="Top" Style="{StaticResource JobsCard}"><StackPanel>
+ <WrapPanel><TextBlock Text="巡回状況" FontWeight="Bold" Margin="0,0,16,0"/><TextBlock Name="JobsPublic" Margin="0,0,16,0"/><TextBlock Name="JobsDots" Foreground="#805300"/></WrapPanel>
+ <TextBlock Name="JobsStatus" Foreground="{StaticResource Jobs.muted}" TextWrapping="Wrap"/>
+ <Expander Header="巡回設定・サイト別の結果" Name="JobsSettings" MaxHeight="180"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel>
+ <TextBlock Name="JobsSitesReport" TextWrapping="Wrap" Margin="6"/><StackPanel Margin="6">
+   <TextBlock Text="求人サイトのURL（1行に1件）"/><TextBox Name="JobsSources" Height="72" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" AutomationProperties.Name="求人サイトのURL"/>
+   <WrapPanel Margin="0,6"><CheckBox Name="JobsDaily" Content="毎日巡回" IsChecked="True" VerticalAlignment="Center"/><TextBlock Text="日本時間" Margin="12,0,4,0" VerticalAlignment="Center"/><TextBox Name="JobsTime" Text="09:00" Width="64" AutomationProperties.Name="巡回時刻"/><Button Name="JobsSave" Content="設定を保存" Margin="8,0"/></WrapPanel>
+  </StackPanel></StackPanel></ScrollViewer></Expander></StackPanel></Border>
+ <WrapPanel Name="JobsModes" DockPanel.Dock="Top" Margin="0,10"><Button Name="JobsAll" MinWidth="106" MinHeight="38" Margin="0,0,8,0"/><Button Name="JobsNew" MinWidth="106" MinHeight="38" Margin="0,0,8,0"/><Button Name="JobsPinned" MinWidth="106" MinHeight="38" Margin="0,0,8,0"/><Button Name="JobsUnread" MinWidth="106" MinHeight="38" Margin="0,0,8,0"/></WrapPanel>
+ <Border DockPanel.Dock="Top" Style="{StaticResource JobsCard}" Margin="0,0,0,12"><DockPanel>
+ <TextBlock Name="JobsCount" DockPanel.Dock="Right" Margin="6" VerticalAlignment="Center"/>
+ <WrapPanel><Grid Width="200" Margin="0,0,6,0"><TextBox Name="JobsSearch" MinHeight="32" Padding="8,4" VerticalContentAlignment="Center" AutomationProperties.Name="案件を検索"/>
+ <TextBlock Text="案件を検索" IsHitTestVisible="False" Margin="10,0" VerticalAlignment="Center" Foreground="{StaticResource Jobs.muted}"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Text, ElementName=JobsSearch}" Value=""><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock></Grid><ComboBox Name="JobsSite" AutomationProperties.Name="掲載サイト" ToolTip="掲載サイト" MinWidth="100" Height="32" Margin="0,0,6,0"/><ComboBox Name="JobsPay" AutomationProperties.Name="報酬形態" ToolTip="報酬形態" MinWidth="100" Height="32" Margin="0,0,6,0"/><ComboBox Name="JobsWork" AutomationProperties.Name="稼働条件" ToolTip="稼働条件" MinWidth="100" Height="32" Margin="0,0,6,0"/><ComboBox Name="JobsOrder" AutomationProperties.Name="並び替え" ToolTip="並び替え" MinWidth="100" Height="32" Margin="0,0,6,0"/><Button Name="JobsReset" Content="条件を解除"/></WrapPanel></DockPanel></Border>
+ <Grid Name="JobsPanes"><Grid.ColumnDefinitions><ColumnDefinition Width="68*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="32*"/></Grid.ColumnDefinitions>
+ <Grid><DataGrid Name="JobsList" SelectionMode="Single" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserSortColumns="False" HeadersVisibility="Column" RowHeight="72" ColumnHeaderHeight="36" EnableRowVirtualization="True" VirtualizingPanel.VirtualizationMode="Recycling" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource Jobs.border}" Background="White" BorderBrush="{StaticResource Jobs.border}" AutomationProperties.Name="案件一覧">
+ <DataGrid.Resources><Style TargetType="DataGridCell"><Setter Property="BorderThickness" Value="0"/><Style.Triggers><Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="{StaticResource Jobs.selected}"/><Setter Property="Foreground" Value="{StaticResource Jobs.text}"/></Trigger></Style.Triggers></Style></DataGrid.Resources>
+ <DataGrid.Columns>
+ <DataGridTemplateColumn Header="ピン" Width="48"><DataGridTemplateColumn.CellTemplate><DataTemplate>
+ <ToggleButton Tag="JobPin" Margin="4" Width="32" Height="32" IsChecked="{Binding IsJobPinned,Mode=OneWay}" VerticalAlignment="Center">
+ <ToggleButton.Style><Style TargetType="ToggleButton"><Setter Property="AutomationProperties.Name" Value="案件をピン留め"/><Setter Property="ToolTip" Value="案件をピン留め"/><Style.Triggers><Trigger Property="IsChecked" Value="True"><Setter Property="AutomationProperties.Name" Value="ピン留めを解除"/><Setter Property="ToolTip" Value="ピン留めを解除"/></Trigger></Style.Triggers></Style></ToggleButton.Style>
+ <Path Data="{StaticResource Jobs.Icon.pin}" Stroke="#096C65" Width="17" Height="17" Stretch="Uniform"><Path.Style><Style TargetType="Path"><Style.Triggers><DataTrigger Binding="{Binding IsJobPinned}" Value="True"><Setter Property="Fill" Value="#096C65"/></DataTrigger></Style.Triggers></Style></Path.Style></Path></ToggleButton>
+ </DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+ <DataGridTemplateColumn Header="案件名 ／ 掲載サイト" Width="3*" MinWidth="135"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Margin="7,0" VerticalAlignment="Center">
+ <DockPanel>
+  <Border DockPanel.Dock="Left" Background="{StaticResource Jobs.primary}" CornerRadius="3" Padding="5,1" Margin="0,0,6,0" VerticalAlignment="Center" ToolTip="今日初めて収集した案件">
+   <Border.Style><Style TargetType="Border"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsNewJob}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Border.Style>
+   <TextBlock Text="新着" FontWeight="SemiBold" FontSize="12" Foreground="White"/>
+  </Border>
+  <TextBlock Text="{Binding title}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding title}"/>
+ </DockPanel>
+ <TextBlock Text="{Binding JobByline}" FontSize="13" Foreground="{StaticResource Jobs.muted}" TextTrimming="CharacterEllipsis"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+ <DataGridTextColumn Header="報酬" Width="1.3*" Binding="{Binding JobPay,Mode=OneWay}" ElementStyle="{StaticResource JobsCell}"/>
+ <DataGridTextColumn Header="期限" Width="100" Binding="{Binding JobShortDeadline,Mode=OneWay}" ElementStyle="{StaticResource JobsCell}"/>
+ </DataGrid.Columns></DataGrid><TextBlock Name="JobsEmpty" TextWrapping="Wrap" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"/></Grid>
+ <GridSplitter Name="JobsGrip" Grid.Column="1" HorizontalAlignment="Stretch" Background="Transparent"/>
+ <Border Name="JobsDetail" Grid.Column="2" Style="{StaticResource JobsCard}" BorderThickness="1" BorderBrush="{StaticResource Jobs.border}">
+ <DockPanel><DockPanel DockPanel.Dock="Top"><Button Name="JobsClose" DockPanel.Dock="Right" Content="×" AutomationProperties.Name="詳細を閉じる" ToolTip="詳細を閉じる"/><TextBlock Text="案件詳細" FontWeight="Bold" VerticalAlignment="Center"/></DockPanel>
+ <TextBlock Name="JobsDetailHint" Text="案件を選ぶと詳細を表示します。" DockPanel.Dock="Top" Margin="0,12" TextWrapping="Wrap"/>
+ <WrapPanel DockPanel.Dock="Bottom" Margin="0,8,0,0"><WrapPanel.Style><Style TargetType="WrapPanel"><Style.Triggers><DataTrigger Binding="{Binding}" Value="{x:Null}"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></WrapPanel.Style>
+ <Button Name="JobsLink" Content="掲載元で詳細を見る ↗" Style="{StaticResource PrimaryAction}"/>
+ <ToggleButton Tag="JobPin" IsChecked="{Binding IsJobPinned,Mode=OneWay}" Padding="8,4" Margin="4,0" VerticalAlignment="Center">
+ <ToggleButton.Style><Style TargetType="ToggleButton"><Setter Property="Content" Value="ピン留め"/><Style.Triggers><Trigger Property="IsChecked" Value="True"><Setter Property="Content" Value="ピン留め解除"/></Trigger></Style.Triggers></Style></ToggleButton.Style></ToggleButton></WrapPanel>
+ <ScrollViewer VerticalScrollBarVisibility="Auto" Name="JobsDetailScroll"><StackPanel Margin="2,8">
+ <TextBlock Text="{Binding JobSite}" Foreground="{StaticResource Jobs.muted}"/><TextBlock Text="{Binding title}" FontSize="19" FontWeight="Bold" TextWrapping="Wrap" Margin="0,4,0,8"/>
+ <TextBlock Text="{Binding JobPay}" Foreground="{StaticResource Jobs.primary}" FontSize="18" FontWeight="Bold" TextWrapping="Wrap"/>
+ <TextBlock Text="{Binding JobFacts}" TextWrapping="Wrap" Margin="0,8"/><Separator/>
+ <TextBlock Text="仕事内容" FontWeight="Bold" Margin="0,8"/><TextBlock Text="{Binding DisplayJobBody}" TextWrapping="Wrap"/>
+ <TextBlock Text="{Binding JobSkills,StringFormat=記載スキル　{0}}" TextWrapping="Wrap" Foreground="{StaticResource Jobs.primary}" Margin="0,8"><TextBlock.Style><Style TargetType="TextBlock"><Style.Triggers><DataTrigger Binding="{Binding JobSkills}" Value=""><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
+ <TextBlock Text="募集条件" FontWeight="Bold" Margin="0,8"/><TextBlock Text="{Binding significance}" TextWrapping="Wrap"/>
+
+ </StackPanel></ScrollViewer></DockPanel></Border>
+ </Grid></DockPanel></Border>
+<Border Name="News" Visibility="Collapsed" Style="{StaticResource card}" Margin="10" Padding="18">
+ <DockPanel Name="NewsRoot" Background="{StaticResource Surface}">
+  <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+   <WrapPanel DockPanel.Dock="Right" VerticalAlignment="Center">
+    <TextBlock Text="収集担当" VerticalAlignment="Center" Margin="0,0,8,0"/>
+    <ComboBox Name="NewsAgent" Width="80" Margin="0,0,8,0" AutomationProperties.Name="収集担当"/>
+    <Button Name="NewsFetch" Style="{StaticResource PrimaryAction}"/>
+   </WrapPanel>
+   <TextBlock Text="AIニュース" FontSize="24" FontWeight="SemiBold" VerticalAlignment="Center"/>
+  </DockPanel>
+  <Expander DockPanel.Dock="Top" Header="収集設定・手動取り込み" Margin="0,0,0,8">
+   <ScrollViewer MaxHeight="150" VerticalScrollBarVisibility="Auto">
+    <StackPanel Background="{StaticResource WorkspaceCanvas}" Margin="0,4,0,0">
+     <WrapPanel Margin="10,8,8,0" Name="PatrolControls">
+      <CheckBox Name="PatrolEnabled" Content="Museの毎日巡回（Windows）" VerticalAlignment="Center" Margin="0,0,10,0"/>
+      <TextBlock Text="日本時間" VerticalAlignment="Center"/><TextBox Name="PatrolTime" Width="58" Margin="5,0,10,0" AutomationProperties.Name="巡回時刻（日本時間）"/>
+      <TextBlock Text="DotsはCodexの自動化で設定" VerticalAlignment="Center" Margin="0,0,6,0"/>
+      <Button Name="PatrolSave" Content="巡回設定を保存" Margin="8,0"/><TextBlock Name="PatrolNext" VerticalAlignment="Center"/>
+     </WrapPanel>
+     <Grid Margin="10,6"><Grid.ColumnDefinitions><ColumnDefinition Width="3*"/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
+      <StackPanel Margin="0,0,12,0"><TextBlock Text="登録ソース（1行に1つのURL）"/><TextBox Name="NewsSources" AcceptsReturn="True" Height="66" VerticalScrollBarVisibility="Auto" AutomationProperties.Name="登録ソース"/></StackPanel>
+      <StackPanel Grid.Column="1"><TextBlock Text="収集サービスのAPI接続先（任意）"/><TextBox Name="NewsEndpoint" AutomationProperties.Name="API接続先"/><TextBlock Text="Slackで依頼する場合は空欄" Foreground="{StaticResource TextSecondary}" FontSize="12"/></StackPanel>
+     </Grid>
+     <WrapPanel Margin="8,0,8,6"><Button Name="NewsSave" Content="設定を保存"/><Button Name="NewsCopy" Content="依頼をコピー"/><Button Name="NewsPaste" Content="結果JSONを取り込む"/><Button Name="NewsStop" Content="返信の確認を終了"/></WrapPanel>
+    </StackPanel>
+   </ScrollViewer>
+  </Expander>
+  <TextBlock Name="NewsStatus" DockPanel.Dock="Top" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" FontSize="13"/>
+  <TabControl Name="NewsTabs" DockPanel.Dock="Top" Margin="0,8,0,0" AutomationProperties.Name="ニュースの分類">
+   <TabControl.Template><ControlTemplate TargetType="TabControl">
+    <Border BorderBrush="{StaticResource Separator}" BorderThickness="0,0,0,1" Padding="0,1,0,5">
+     <WrapPanel IsItemsHost="True" KeyboardNavigation.TabNavigation="Once"/>
+    </Border>
+   </ControlTemplate></TabControl.Template>
+   <TabControl.ItemContainerStyle><Style TargetType="TabItem">
+    <Setter Property="Margin" Value="0,0,3,3"/><Setter Property="FontSize" Value="14"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TabItem">
+     <Border Name="TabSurface" CornerRadius="6" BorderThickness="2" BorderBrush="Transparent" Background="Transparent" Padding="8,5" MinHeight="34">
+      <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+       <TextBlock Name="TabLabel" Text="{TemplateBinding Tag}" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+       <Border Name="UnreadBadge" CornerRadius="10" Margin="6,0,0,0" MinWidth="20" Padding="5,1" Background="{StaticResource Selection}">
+        <TextBlock Name="UnreadCount" Text="{TemplateBinding Header}" FontSize="12" FontWeight="Bold" Foreground="{StaticResource ActionPrimary}" HorizontalAlignment="Center"/>
+       </Border>
+      </StackPanel>
+     </Border>
+     <ControlTemplate.Triggers>
+      <Trigger Property="Header" Value="{x:Null}"><Setter TargetName="UnreadBadge" Property="Visibility" Value="Collapsed"/></Trigger>
+      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="TabSurface" Property="Background" Value="{StaticResource WorkspaceCanvas}"/></Trigger>
+      <Trigger Property="IsSelected" Value="True"><Setter TargetName="TabSurface" Property="Background" Value="{StaticResource ActionPrimary}"/><Setter TargetName="TabLabel" Property="Foreground" Value="White"/><Setter TargetName="TabLabel" Property="FontWeight" Value="SemiBold"/><Setter TargetName="UnreadBadge" Property="Background" Value="White"/></Trigger>
+      <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="TabSurface" Property="BorderBrush" Value="{StaticResource FocusRing}"/></Trigger>
+     </ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
+   </Style></TabControl.ItemContainerStyle>
+  </TabControl>
+  <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="2*" MinWidth="220"/><ColumnDefinition Width="3*" MinWidth="280"/></Grid.ColumnDefinitions>
+   <Border Background="#F6F5F2" CornerRadius="8" Padding="10">
+    <DockPanel><StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+      <TextBlock Name="NewsCount" TextWrapping="Wrap" FontWeight="SemiBold" Margin="4,2,4,6"/>
+      <Button Name="NewsMarkTabRead" Style="{StaticResource PrimaryAction}" FontWeight="SemiBold" HorizontalAlignment="Stretch" MinHeight="38">
+       <Button.ContentTemplate><DataTemplate><TextBlock Text="{Binding}" TextAlignment="Center" TextWrapping="Wrap"/></DataTemplate></Button.ContentTemplate>
+      </Button></StackPanel>
+     <StackPanel Name="NewsPager" DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,0" Visibility="Collapsed">
+      <Button Name="NewsPrevPage" Content="前へ" AutomationProperties.Name="前のページ"/>
+      <TextBlock Name="NewsPageNumber" VerticalAlignment="Center" Margin="8,0"/>
+      <Button Name="NewsNextPage" Content="次へ" AutomationProperties.Name="次のページ"/>
+     </StackPanel>
+     <ListBox Name="NewsList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch" AutomationProperties.Name="記事一覧">
+      
+      <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Margin" Value="0,0,0,4"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><Border Name="Tile" Padding="11,8" Background="White" BorderBrush="Transparent" BorderThickness="2" CornerRadius="5"><ContentPresenter/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Tile" Property="Background" Value="#EAF2F0"/></Trigger><Trigger Property="IsSelected" Value="True"><Setter TargetName="Tile" Property="Background" Value="{StaticResource Selection}"/><Setter TargetName="Tile" Property="BorderBrush" Value="{StaticResource ActionPrimary}"/></Trigger><Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Tile" Property="BorderBrush" Value="{StaticResource FocusRing}"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
+      <ListBox.ItemTemplate><DataTemplate><StackPanel><TextBlock Text="{Binding Byline}" FontSize="12" Foreground="{StaticResource TextSecondary}"/><TextBlock Name="NewsHeadline" Text="{Binding title}" Margin="0,3,0,0" TextWrapping="Wrap" FontWeight="Normal"/></StackPanel><DataTemplate.Triggers><DataTrigger Binding="{Binding IsUnread}" Value="True"><Setter TargetName="NewsHeadline" Property="FontWeight" Value="Bold"/></DataTrigger></DataTemplate.Triggers></DataTemplate></ListBox.ItemTemplate>
+     </ListBox>
+    </DockPanel>
+   </Border>
+   <Grid Grid.Column="1" Margin="20,0,2,0">
+    <TextBlock Name="NewsEmpty" Text="収集した記事はここに表示されます。" TextWrapping="Wrap" VerticalAlignment="Center" HorizontalAlignment="Center" Foreground="{StaticResource TextSecondary}"/>
+    <DockPanel Name="NewsArticle">
+     <WrapPanel DockPanel.Dock="Bottom" Margin="0,10,0,0"><Button Name="NewsOpen" Content="原文を開く" Style="{StaticResource PrimaryAction}"/><Button Name="NewsTask" Content="タスク化…" Margin="8,0"/></WrapPanel>
+     <ScrollViewer Name="NewsScroll" VerticalScrollBarVisibility="Auto"><StackPanel Margin="0,4,10,8">
+      <ComboBox Name="NewsVariant" DisplayMemberPath="Byline" AutomationProperties.Name="統合した記事の出典を切り替え" Margin="0,0,0,6"/>
+      <TextBlock Text="{Binding Byline}" Foreground="{StaticResource ActionPrimary}" FontWeight="SemiBold"/>
+      <TextBlock Text="{Binding title}" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,6,0,16"/>
+      <TextBlock Text="要約" Style="{StaticResource SectionHeading}"/><TextBlock Text="{Binding summary}" FontSize="16" TextWrapping="Wrap" Margin="0,5,0,16"/>
+      <Border Background="{StaticResource Selection}" Padding="12" CornerRadius="6"><StackPanel><TextBlock Text="重要な理由" FontWeight="SemiBold"/><TextBlock Text="{Binding significance}" TextWrapping="Wrap" Margin="0,4,0,0"/></StackPanel></Border>
+      <TextBlock Text="出典" Style="{StaticResource SectionHeading}" Margin="0,18,0,4"/>
+      <TextBlock TextWrapping="Wrap" Margin="0,2"><Hyperlink NavigateUri="{Binding url, Mode=OneWay}" AutomationProperties.Name="原文URL"><Run Text="{Binding url, Mode=OneWay}"/></Hyperlink></TextBlock>
+      <StackPanel Name="NewsRegistered"><TextBlock Text="登録ソース" Margin="0,8,0,2" Foreground="{StaticResource TextSecondary}"/><TextBlock TextWrapping="Wrap" Margin="0,2"><Hyperlink NavigateUri="{Binding source, Mode=OneWay}" AutomationProperties.Name="登録元URL"><Run Text="{Binding source, Mode=OneWay}"/></Hyperlink></TextBlock></StackPanel>
+     </StackPanel></ScrollViewer>
+    </DockPanel>
+   </Grid>
+  </Grid>
+ </DockPanel>
+</Border>
+<Border Name="Culture" Visibility="Collapsed" Style="{StaticResource card}" Margin="10" Padding="12">
+ <DockPanel>
+ <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+ <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center"><Button Name="CultureRefresh" Content="↻ 更新"/></StackPanel>
+ <UniformGrid DockPanel.Dock="Left" Name="CultureCards" Columns="2" Margin="0,0,14,0"/>
+ <StackPanel VerticalAlignment="Center"><TextBlock Name="CultureTitle" FontSize="19" FontWeight="SemiBold"/><TextBlock Name="CultureInfo"/><TextBlock Name="CultureReport" TextWrapping="Wrap" Foreground="{StaticResource TextSecondary}"/></StackPanel>
+ </DockPanel>
+ <TextBlock Name="ManagerStatus" DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="{StaticResource TextSecondary}"/>
+ <ContentControl Name="ManagerArea" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
+ </DockPanel>
+</Border>
+<Border Name="Analytics" Visibility="Collapsed" Style="{StaticResource card}" Margin="10" Padding="20">
+ <DockPanel>
+  <DockPanel DockPanel.Dock="Top"><Button Name="AnalyticsRefresh" Content="↻ 更新" DockPanel.Dock="Right"/><Button Name="SharedProgress" Tag="103" Content="共有目標・進捗の詳細を見る" DockPanel.Dock="Right" Margin="0,0,6,0" ToolTip="共有ダッシュボードの目標・期限と作業ごとの状況を表示"/><TextBlock Text="KPI分析" Style="{StaticResource SectionHeading}"/></DockPanel>
+  <TextBlock Name="AnalyticsTime" DockPanel.Dock="Top" Margin="0,6,0,8" Foreground="{StaticResource TextSecondary}"/>
+  <StackPanel Name="AnalyticsLogin" DockPanel.Dock="Top" Orientation="Horizontal" Visibility="Collapsed"><TextBlock Text="閲覧用合言葉" VerticalAlignment="Center"/><PasswordBox Name="AnalyticsKey" Width="190" Margin="8,0" AutomationProperties.Name="閲覧用合言葉"/><Button Name="AnalyticsConnect" Content="接続"/></StackPanel>
+  <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,4" VerticalAlignment="Center">
+   <TextBlock Text="比較時点" VerticalAlignment="Center"/><ComboBox Name="KpiPoint" MinWidth="180" Margin="8,0,14,0" AutomationProperties.Name="比較時点"/>
+   <TextBlock Text="改善策メモ" VerticalAlignment="Center"/><TextBox Name="KpiMemo" Width="180" Margin="6,0" MaxLength="300" AutomationProperties.Name="保存する改善策メモ"/><Button Name="KpiSave" Content="＋ 現時点を記録" ToolTip="最新値を取得し、改善策メモと保存"/>
+  </WrapPanel>
+  <CheckBox DockPanel.Dock="Top" Name="KpiGoalEditor" Content="改善策の目標を付けて記録" Margin="0,0,0,4"/>
+   <WrapPanel DockPanel.Dock="Top">
+    <WrapPanel.Style><Style TargetType="WrapPanel"><Style.Triggers><DataTrigger Binding="{Binding IsChecked, ElementName=KpiGoalEditor}" Value="False"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></WrapPanel.Style>
+    <TextBlock Text="対象範囲" VerticalAlignment="Center"/><ComboBox Name="GoalScope" MinWidth="100" Margin="5" AutomationProperties.Name="改善策の対象範囲"/>
+    <TextBlock Text="指標" VerticalAlignment="Center"/><ComboBox Name="GoalMetric" Margin="5" AutomationProperties.Name="改善策の指標"/>
+    <TextBlock Text="目標値" VerticalAlignment="Center"/><TextBox Name="GoalTarget" Width="52" Margin="5" AutomationProperties.Name="目標値"/>
+    <ComboBox Name="GoalDirection" SelectedIndex="0" Margin="0,5,10,5" AutomationProperties.Name="目標条件"><ComboBoxItem Content="以下"/><ComboBoxItem Content="以上"/></ComboBox>
+    <TextBlock Text="次回確認日" VerticalAlignment="Center"/><DatePicker Name="GoalDate" Margin="5" AutomationProperties.Name="次回確認日"/>
+   </WrapPanel>
+  <TextBlock DockPanel.Dock="Top" Name="KpiHistoryNotice" Foreground="#8A461C" TextWrapping="Wrap"/>
+  <WrapPanel Name="AnalyticsMetrics" DockPanel.Dock="Top" Margin="0,8,0,14"/>
+  <TabControl><TabItem Header="集計"><DockPanel><StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,8"><RadioButton Name="AnalyticsProject" GroupName="KpiGroups" Content="プロジェクト別" IsChecked="True" Margin="0,0,18,0"/><RadioButton Name="AnalyticsAgent" GroupName="KpiGroups" Content="担当AI別"/></StackPanel>
+  <WrapPanel Name="AnalyticsLegend" DockPanel.Dock="Top" Margin="2,0,0,8"/>
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><Grid><StackPanel Name="AnalyticsProjects"/><WrapPanel Name="AnalyticsPies" Visibility="Collapsed"/></Grid></ScrollViewer></DockPanel></TabItem>
+  <TabItem Name="KpiTrendTab" Header="推移・改善"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="10">
+   <TextBlock Name="KpiEffect" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,6"/>
+   <WrapPanel><ComboBox Name="KpiScope" MinWidth="150" Margin="0,0,8,0" AutomationProperties.Name="分析対象"/><WrapPanel Name="KpiTrendLegend" VerticalAlignment="Center"/></WrapPanel>
+   <Canvas Name="KpiPlot" Height="216" ClipToBounds="True" Margin="0,8"/>
+   <WrapPanel><TextBlock Text="観測日時" VerticalAlignment="Center"/><ComboBox Name="KpiObservation" MinWidth="180" Margin="8,0" AutomationProperties.Name="詳細を表示する観測日時"/></WrapPanel>
+   <TextBlock Name="KpiObservationDetail" TextWrapping="Wrap" Margin="0,6,0,14"/>
+   <WrapPanel Margin="0,0,0,8"><TextBlock Text="基準時点" VerticalAlignment="Center"/><ComboBox Name="KpiBaseline" MinWidth="180" Margin="8,0" AutomationProperties.Name="基準時点"/></WrapPanel>
+   <TextBlock Name="KpiComparison" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"/>
+   <TextBlock Name="KpiChanges" TextWrapping="Wrap" Margin="0,6"/>
+   <TextBlock Name="KpiNotes" TextWrapping="Wrap" Foreground="{StaticResource TextSecondary}"/>
+   <TextBlock Name="KpiGoalReview" TextWrapping="Wrap" Margin="0,8"/>
+   <StackPanel Name="KpiTaskActions"/>
+  </StackPanel></ScrollViewer></TabItem></TabControl>
+ </DockPanel>
+</Border><Border Name="Guard" Visibility="Collapsed" Style="{StaticResource card}" Margin="10"/></Grid></DockPanel></Window>

@@ -50,15 +50,14 @@ fn key(vk: u16, release: bool) -> Input {
         },
     }
 }
-pub(super) fn start(dialog: H) -> Result<()> {
-    const FIELD: i32 = 403;
-    let edit = unsafe { GetDlgItem(dialog, FIELD) };
+pub(super) fn start(dialog: H, field: i32) -> Result<()> {
+    let edit = unsafe { GetDlgItem(dialog, field) };
     let mut caret = 0u32;
-    msg(dialog, FIELD, 0xb0, 0, &mut caret as *mut _ as isize); // EM_GETSEL
+    msg(dialog, field, 0xb0, 0, &mut caret as *mut _ as isize); // EM_GETSEL
     unsafe {
         SetFocus(edit);
     }
-    msg(dialog, FIELD, 0xb1, caret as usize, caret as isize); // preserve existing draft
+    msg(dialog, field, 0xb1, caret as usize, caret as isize); // preserve existing draft
     if unsafe { GetFocus() } != edit {
         return Err("依頼欄にカーソルを置き、Windows キー＋H を押してください。".into());
     }

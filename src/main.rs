@@ -2,6 +2,7 @@
 mod action_summary;
 use action_summary::Reply;
 mod ask;
+mod queue_import;
 mod brand;
 mod chart;
 mod client;
@@ -94,8 +95,38 @@ struct TaskSession {
     model: String,
     effort: String,
 }
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct TaskId(u128);
+
+impl Default for TaskId {
+    fn default() -> Self {
+        #[link(name = "ole32")]
+        extern "system" { fn CoCreateGuid(guid: *mut u128) -> i32; }
+        let mut guid = 0;
+        assert_eq!(unsafe { CoCreateGuid(&mut guid) }, 0, "タスクIDを発行できません");
+        Self(guid)
+    }
+}
+
+impl TaskId {
+    fn parse(raw: &str) -> Result<Self> {
+        if raw.len() == 32 && raw.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return u128::from_str_radix(raw, 16).map(Self).map_err(|e| e.to_string());
+        }
+        Err("タスクIDが不正です".into())
+    }
+}
+impl std::fmt::Display for TaskId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:032x}", self.0)
+    }
+}
 #[derive(Clone, Default)]
 struct Task {
+    completion_condition: String,
+    kpi_goal: String,
+    id: TaskId,
+    parent: Option<TaskId>,
     other_sessions: Vec<TaskSession>,
     session_title: String,
     session: String,
@@ -103,6 +134,7 @@ struct Task {
     model: String,
     effort: String,
     next_action: String,
+    draft_images: Vec<PathBuf>,
     submitted_action_run: String,
     cwd: String,
     pinned: bool,
@@ -115,13 +147,26 @@ struct Task {
     legacy_department: String, // Retain the original TSV column when saving older tasks.
     docs: [String; 3],
 }
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum QueueFilter {
+    #[default]
+    All,
+    Working,
+    AiRunning,
+    Reviewing,
+}
+
 #[derive(Default, Clone)]
 struct App {
+    bulk_undo: Option<(usize, Vec<(usize, Task)>)>,
     panes: u8,
     metric: usize,
     search_panel: bool,
     query: String,
     agent_filter: usize,
+    queue_filter: QueueFilter,
+    imported_batches: std::collections::BTreeSet<String>,
+    queue_receipts: Vec<queue_import::Receipt>,
     projects: Vec<String>,
     discovered: Vec<String>,
     progress_history: Vec<ProgressPoint>,
@@ -155,7 +200,17 @@ fn decode(s: &str) -> String {
         .replace("%0D", "\r")
         .replace("%25", "%")
 }
+mod bulk_edit;
+mod task_status;
 impl Task {
+    fn select_agent(&mut self, agent: usize) {
+        if self.agent == agent { return; }
+        if let Some(i) = self.other_sessions.iter().position(|s| s.agent == agent) {
+            self.activate(i);
+        } else {
+            self.link_session(TaskSession { agent, ..Default::default() });
+        }
+    }
     fn swap_session(&mut self, mut session: TaskSession) -> TaskSession {
         use std::mem::swap;
         swap(&mut self.session,&mut session.id);
@@ -190,8 +245,83 @@ impl Task {
     }
     fn working_dir(&self)->&str {if self.cwd.is_empty(){&self.project}else{&self.cwd}}
 }
+// Independent workspaces identified in dots/MIGRATION.md; require the source marker.
+const MIGRATED_PROJECTS: &[(&str, &str, &str)] = &[
+    ("game_creator", r"dots\game_creator", "FRONTLINE-README.md"),
+    ("chromarch", r"dots\game_creator\TurfWars", "ProjectSettings/ProjectSettings.asset"),
+    ("bunker", r"dots\game_creator\bunker", "game.js"),
+    ("seahouse", r"dots\game_creator\seahouse", "index.html"),
+    ("mebae-c", r"dots\mebae-c", "Cargo.toml"),
+    // 2026-11-25 restructure: products under kasane\, PC tools under os\ (D:\.company\CLAUDE.md).
+    ("kasaneLite", r"kasane\kasaneLite", "package.json"),
+    ("shirube", r"kasane\shirube", "package.json"),
+    ("KasaneFactoryOS", r"kasane\KasaneFactoryOS", "package.json"),
+    ("kagari", r"os\kagari", "Cargo.toml"),
+    ("shiranui", r"os\shiranui", "CLAUDE.md"),
+    // 2026-11-26: line_model joined the kasane group, slack_bot the os group (D:\.company\CLAUDE.md).
+    ("line_model", r"kasane\line_model", "package.json"),
+    ("slack_bot", r"os\slack_bot", "package.json"),
+];
+// Parent folders that only group the projects above; they are not projects themselves.
+const PROJECT_GROUPS: &[&str] = &["kasane", "os"];
+fn is_project_group(company: &Path, name: &str) -> bool {
+    PROJECT_GROUPS.iter().any(|g| g.eq_ignore_ascii_case(name))
+        && MIGRATED_PROJECTS.iter().any(|&(_, root, marker)| {
+            Path::new(root).parent().is_some_and(|p| p.as_os_str().eq_ignore_ascii_case(name))
+                && company.join(root).join(marker).is_file()
+        })
+}
+fn project_alias(path: &Path) -> Option<&'static str> {
+    let company = path.ancestors().find(|dir| dir.file_name().is_some_and(|n| n.eq_ignore_ascii_case(".company")))?;
+    let relative = path.strip_prefix(company).ok()?.as_os_str();
+    MIGRATED_PROJECTS.iter().find_map(|&(name, root, _)| {
+        relative.eq_ignore_ascii_case(std::ffi::OsStr::new(root)).then_some(name)
+    })
+}
+fn department_matches(name: &str, alias: &str, relative: &str) -> bool {
+    name.eq_ignore_ascii_case(alias) || Path::new(relative).file_name()
+        .is_some_and(|leaf| leaf.eq_ignore_ascii_case(name))
+}
+// The pre-dots tree, department name and project folder name occur in saved paths.
+fn former_roots(alias: &str, relative: &str) -> [PathBuf; 3] {
+    let root = Path::new(relative);
+    [root.strip_prefix("dots").unwrap_or(root).to_owned(), PathBuf::from(alias),
+     PathBuf::from(root.file_name().unwrap())]
+}
+fn migrated_path(path: &Path) -> PathBuf {
+    let Some(company) = path.ancestors().find(|p| p.file_name().is_some_and(|n| n.eq_ignore_ascii_case(".company"))) else {
+        return path.to_owned();
+    };
+    let relative = path.strip_prefix(company).unwrap();
+    for prefix in relative.ancestors().filter(|p| !p.as_os_str().is_empty()) {
+        for &(alias, current, marker) in MIGRATED_PROJECTS {
+            let matches = |p: &Path| prefix.as_os_str().eq_ignore_ascii_case(p.as_os_str());
+            if matches(Path::new(current)) || former_roots(alias,current).iter().any(|p|matches(p)) {
+                let root = company.join(current);
+                if root.join(marker).is_file() {
+                    let mut root = root.canonicalize().unwrap_or(root);
+                    let suffix = relative.strip_prefix(prefix).unwrap();
+                    if !suffix.as_os_str().is_empty() {root.push(suffix);}
+                    return root;
+                }
+            }
+        }
+    }
+    path.to_owned()
+}
+// Both the request context and the Markdown viewer use the same external report scope.
+fn chromarch_report(drive: &Path, path: &Path) -> bool {
+    let Some(bundle) = path.parent() else { return false };
+    if bundle.parent() != Some(drive) || !bundle.file_name().is_some_and(|n| n.to_string_lossy().starts_with("CHROMARCH-")) {
+        return false;
+    }
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return false };
+    matches!(name, "INTEGRATION_STATUS.md" | "受入結果.md")
+        || (name.starts_with("QUEUE-ALL-CITIES-") && name.ends_with(".md"))
+}
 fn project_root(path: &str) -> &str {
     for project in Path::new(path).ancestors() {
+        if project_alias(project).is_some() { return project.to_str().unwrap_or(path); }
         if project.parent().and_then(Path::file_name)
             .is_some_and(|name| name.eq_ignore_ascii_case(".company")) {
             return project.to_str().unwrap_or(path);
@@ -206,6 +336,28 @@ struct ProgressPoint {
     counts: [usize;4],
 }
 impl App {
+    fn resolve_migrated_paths(&mut self) {
+        let update = |s: &mut String| *s = migrated_path(Path::new(s)).to_string_lossy().into_owned();
+        for p in &mut self.projects { update(p); }
+        if let Some(p) = &mut self.default_project { update(p); }
+        self.pinned_projects = std::mem::take(&mut self.pinned_projects).into_iter()
+            .map(|mut p| {update(&mut p); p.to_lowercase()}).collect();
+        for point in &mut self.progress_history {
+            update(&mut point.project);
+            point.project = point.project.to_lowercase();
+        }
+        for receipt in &mut self.queue_receipts { update(&mut receipt.project); }
+        for task in &mut self.tasks {
+            update(&mut task.project);
+            update(&mut task.cwd);
+            for session in &mut task.other_sessions { update(&mut session.cwd); }
+            let root = Path::new(&task.project);
+            for doc in task.docs.iter_mut().filter(|s| !s.is_empty()) {
+                let path = migrated_path(&root.join(&*doc));
+                if let Ok(relative) = path.strip_prefix(root) { *doc = relative.to_string_lossy().into_owned(); }
+            }
+        }
+    }
     fn progress_changes(&self) -> Vec<ProgressPoint> {
         use std::collections::{BTreeMap,HashMap};
         let mut latest=HashMap::new();
@@ -220,10 +372,19 @@ impl App {
             .map(|(project,counts)|ProgressPoint{project,millis,counts}).collect()
     }
     fn save(&mut self) -> Result<()> {
+        self.save_to(&state_path()?)
+    }
+    fn save_to(&mut self, dest: &Path) -> Result<()> {
         let mut rows = vec![format!("V\t{}", self.panes)];
         if let Some(project)=&self.default_project {rows.push(format!("DP\t{}",escape(project)));}
         if self.pinned_projects_only { rows.push("CP\t1".into()); }
         for p in &self.pinned_projects { rows.push(format!("PP\t{}", escape(p))); }
+        for batch in &self.imported_batches { rows.push(format!("QI\t{}",escape(batch))); }
+        for receipt in &self.queue_receipts {
+            let mut fields=vec!["QR".into(),escape(&receipt.project),escape(&receipt.parent_key),receipt.existing.to_string(),receipt.failed.to_string()];
+            fields.extend(receipt.added.iter().map(|title|escape(title)));
+            rows.push(fields.join("\t"));
+        }
         for p in &self.projects {
             if self.discovered.contains(p) && !self.tasks.iter().any(|t| &t.project == p) {continue;}
             rows.push(format!("P\t{}", escape(p)));
@@ -249,6 +410,8 @@ impl App {
                 t.cwd.clone(),
                 t.session_title.clone(),
                 t.submitted_action_run.clone(),
+                t.id.to_string(),
+                t.parent.map(|id| id.to_string()).unwrap_or_default(),
             ];
             rows.push(format!(
                 "T\t{}",
@@ -258,9 +421,16 @@ impl App {
                     .collect::<Vec<_>>()
                     .join("\t")
             ));
+            if !t.completion_condition.is_empty() { rows.push(format!("CC\t{}", escape(&t.completion_condition))); }
+            if !t.kpi_goal.is_empty() { rows.push(format!("KG\t{}", escape(&t.kpi_goal))); }
             for s in &t.other_sessions {
                 let fields=[s.agent.to_string(),s.id.clone(),s.title.clone(),s.cwd.clone(),s.history_key.clone(),s.model.clone(),s.effort.clone()];
-                rows.push(format!("S\t{}",fields.iter().map(|v|escape(v)).collect::<Vec<_>>().join("\t")));
+                rows.push(format!("S\t{}\t{}",fields.iter().map(|v|escape(v)).collect::<Vec<_>>().join("\t"),t.id));
+            }
+            for image in &t.draft_images {
+                let root = ask::draft_image_root()?;
+                let relative = image.strip_prefix(root).map_err(|_| "下書き画像の保存先が不正です")?;
+                rows.push(format!("I\t{}", escape(&relative.to_string_lossy())));
             }
         }
         rows.push(format!("L\t{}", escape(&self.log)));
@@ -269,37 +439,81 @@ impl App {
             let [a,b,c,d]=point.counts;
             rows.push(format!("H\t{}\t{}\t{a}\t{b}\t{c}\t{d}",escape(&point.project),point.millis));
         }
-        let dest = state_path()?;
         fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
         let tmp = dest.with_extension("tmp");
         fs::write(&tmp, rows.join("\n"))
             .and_then(|_| fs::rename(tmp, dest))
             .map_err(|e| e.to_string())?;
         self.progress_history.extend(changes);
+        self.bulk_undo = None;
         Ok(())
     }
     fn load() -> Result<Self> {
+        Self::load_from(&state_path()?)
+    }
+    fn load_from(dest: &Path) -> Result<Self> {
         let mut a = Self::default();
-        let data = match fs::read_to_string(state_path()?) {
+        let data = match fs::read_to_string(dest) {
             Ok(v) => v,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(format!("{}: {e}", dest.display())),
         };
-        for line in data.lines() {
+        let mut migrated = false;
+        let mut legacy_session = false;
+        let mut legacy_parents = Vec::new();
+        let mut sessions = Vec::new();
+        let mut ids = std::collections::HashMap::new();
+        for (index,line) in data.lines().enumerate() {
+            let number = index + 1;
             let f: Vec<_> = line.split('\t').map(decode).collect();
+            let parse_record = (|| -> Result<()> {
             match f[0].as_str() {
+                "I" if f.len() == 2 => {
+                    let relative = Path::new(&f[1]);
+                    let mut parts = relative.components();
+                    use std::path::Component::Normal;
+                    if !matches!((parts.next(), parts.next(), parts.next()), (Some(Normal(_)), Some(Normal(_)), None)) {
+                        return Err("下書き画像のパスが不正です".into());
+                    }
+                    a.tasks.last_mut().ok_or("下書き画像のタスクがありません")?
+                        .draft_images.push(ask::draft_image_root()?.join(relative));
+                }
                 "V" if f.len() == 2 => a.panes = f[1].parse::<u8>().unwrap_or(0) & 31,
                 "H" if f.len()==7 => {
                     let mut counts=[0;4];
                     for (count,value) in counts.iter_mut().zip(&f[3..]) {*count=value.parse().map_err(|_|"進捗の件数が不正です")?;}
                     a.progress_history.push(ProgressPoint{project:f[1].clone(),millis:f[2].parse().map_err(|_|"進捗の記録日時が不正です")?,counts});
                 }
+                "TP" if f.len()==3 => {
+                    let child=f[1].parse().map_err(|_|"子タスク番号が不正です")?;
+                    let parent=f[2].parse().map_err(|_|"親タスク番号が不正です")?;
+                    legacy_parents.push((child,parent,number));
+                }
+                "QI" if f.len()==2 => {a.imported_batches.insert(f[1].clone());},
+                "QR" if f.len()>=5 => a.queue_receipts.push(queue_import::Receipt{
+                    project:f[1].clone(),parent_key:f[2].clone(),added:f[5..].to_vec(),
+                    existing:f[3].parse().map_err(|_|"登録済み件数が不正です")?,
+                    failed:f[4].parse().map_err(|_|"登録失敗件数が不正です")?,
+                }),
                 "DP" if f.len()==2 => a.default_project=Some(f[1].clone()),
                 "CP" if f.len() == 2 => a.pinned_projects_only = f[1] == "1",
                 "PP" if f.len() == 2 => { a.pinned_projects.insert(f[1].to_lowercase()); },
                 "P" if f.len() == 2 => a.projects.push(f[1].clone()),
                 "L" if f.len() == 2 => a.log = f[1].clone(),
-                "T" if matches!(f.len(), 11 | 12 | 14 | 15 | 16 | 17 | 18 | 19 | 20) => a.tasks.push(Task {
+                "CC" if f.len()==2 => a.tasks.last_mut().ok_or("完了条件のタスクがありません")?.completion_condition=f[1].clone(),
+                "KG" if f.len()==2 => a.tasks.last_mut().ok_or("改善タスクが見つかりません")?.kpi_goal=f[1].clone(),
+                "T" if matches!(f.len(), 11 | 12 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 22) => a.tasks.push(Task {
+                    completion_condition: String::new(),
+                    kpi_goal: String::new(),
+                    id: {
+                        let id = match f.get(20) {
+                            Some(raw) => TaskId::parse(raw)?,
+                            None => { migrated = true; TaskId::default() }
+                        };
+                        if ids.insert(id, a.tasks.len()).is_some() {return Err("タスクIDが重複しています".into());}
+                        id
+                    },
+                    parent:f.get(21).filter(|s| !s.is_empty()).map(|s| TaskId::parse(s)).transpose()?,
                     other_sessions: Vec::new(),
                     session_title: f.get(18).or_else(||f.get(2)).cloned().unwrap_or_default(),
                     session: f.get(14).cloned().unwrap_or_default(),
@@ -320,6 +534,7 @@ impl App {
                         None => ask::legacy_action_run(f.get(12), f.get(16)).unwrap_or_default(),
                     },
                     next_action: f.get(16).cloned().unwrap_or_default(),
+                    draft_images: Vec::new(),
                     effort: f.get(15).cloned().unwrap_or_default(),
                     model: f.get(13).cloned().unwrap_or_default(),
                     pinned: matches!(f.get(11).map(String::as_str), Some("1")),
@@ -340,13 +555,37 @@ impl App {
                     legacy_department: f[7].clone(),
                     docs: [f[8].clone(), f[9].clone(), f[10].clone()],
                 }),
-                "S" if f.len()==8 => {
-                    let task=a.tasks.last_mut().ok_or("セッションの親タスクがありません")?;
+                "S" if matches!(f.len(),8|9) => {
+                    let owner = match f.get(8) {
+                        Some(raw) => TaskId::parse(raw)?,
+                        None => {
+                            legacy_session = true;
+                            a.tasks.last().ok_or("セッションの親タスクがありません")?.id
+                        }
+                    };
                     let agent=f[1].parse::<usize>().ok().filter(|n|*n<AGENTS.len()).ok_or("担当AIが不正です")?;
                     if f[5].len()>64 || !f[5].bytes().all(|c|c.is_ascii_digit() || c==b'-') {return Err("履歴IDが不正です".into());}
-                    task.other_sessions.push(TaskSession{agent,id:f[2].clone(),title:f[3].clone(),cwd:f[4].clone(),history_key:f[5].clone(),model:f[6].clone(),effort:f[7].clone()});
+                    sessions.push((owner,number,TaskSession{agent,id:f[2].clone(),title:f[3].clone(),cwd:f[4].clone(),history_key:f[5].clone(),model:f[6].clone(),effort:f[7].clone()}));
                 }
                 _ => return Err("保存形式を読み取れません".into()),
+            }
+            Ok(())
+            })();
+            parse_record.map_err(|e| format!("{} {number}行目 ({}): {e}",dest.display(),f[0]))?;
+        }
+        for (owner,number,session) in sessions {
+            let row = *ids.get(&owner).ok_or_else(|| format!("{} {number}行目: セッションの親タスク {owner} がありません", dest.display()))?;
+            a.tasks[row].other_sessions.push(session);
+        }
+        a.resolve_migrated_paths();
+        for (child,parent,number) in legacy_parents {
+            if !migrated {return Err(format!("{} {number}行目: 旧形式の親タスク番号が残っています", dest.display()));}
+            a.set_parent(child,Some(parent)).map_err(|e| format!("{} {number}行目: {e}",dest.display()))?;
+        }
+        for (row,task) in a.tasks.iter().enumerate() {
+            if let Some(id) = task.parent {
+                let parent = *ids.get(&id).ok_or_else(|| format!("{}: タスク {} の親 {id} がありません",dest.display(),task.id))?;
+                if !a.can_parent(row,parent) {return Err(format!("{}: タスク {} の親子関係が不正です",dest.display(),task.id));}
             }
         }
         let mut roots = Vec::new();
@@ -371,7 +610,16 @@ impl App {
         a.projects=roots;
         a.discover_departments();
         a.project=a.default_project_index().unwrap_or(0);
-        if !a.progress_changes().is_empty(){a.save()?;}
+        if migrated || legacy_session {
+            let backup = Command::new("powershell.exe")
+                .args(["-NoProfile","-NonInteractive","-Command",include_str!("recovery.ps1")])
+                .env("KAGARI_RECOVERY_SOURCE",dest)
+                .creation_flags(0x08000000).output().map_err(|e|e.to_string())?;
+            if !backup.status.success() {
+                return Err(format!("移行前の復元点を作成できません: {}",String::from_utf8_lossy(&backup.stderr)));
+            }
+        }
+        if migrated || legacy_session || !a.progress_changes().is_empty(){a.save_to(dest)?;}
         Ok(a)
     }
     fn discover_departments(&mut self) {
@@ -393,8 +641,26 @@ impl App {
             let mut children = Vec::new();
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with('.') || ["_task_xml","tmp","outputs","ClaudeCode","Codex"].iter().any(|n|name.eq_ignore_ascii_case(n)) {continue;}
-                if entry.path().is_dir() { children.push(entry.path().to_string_lossy().into_owned()); }
+                if name.starts_with('.') || ["_task_xml","_archive","tmp","outputs","ClaudeCode","Codex"].iter().any(|n|name.eq_ignore_ascii_case(n)) {continue;}
+                if is_project_group(&company, &name) {continue;}
+                if entry.path().is_dir() { children.push(migrated_path(&entry.path()).to_string_lossy().into_owned()); }
+            }
+            for &(alias, relative, marker) in MIGRATED_PROJECTS {
+                let migrated = company.join(relative);
+                if !migrated.join(marker).is_file() {continue;}
+                let migrated = migrated.canonicalize().unwrap_or(migrated);
+                children.push(migrated.to_string_lossy().into_owned());
+                for task in &mut self.tasks {
+                    if department_matches(&task.legacy_department, alias, relative)
+                        && is_company(Path::new(&task.project))
+                        && Path::new(&task.project).canonicalize().is_ok_and(|p| Some(p.as_path()) == migrated.ancestors().find(|p| is_company(p))) {
+                        for doc in task.docs.iter_mut().filter(|doc| !doc.is_empty()) {
+                            let path = migrated_path(&company.join(&*doc));
+                            *doc = path.strip_prefix(&migrated).unwrap_or(&path).to_string_lossy().into_owned();
+                        }
+                        task.project = migrated.to_string_lossy().into_owned();
+                    }
+                }
             }
             children.sort_by_key(|p|p.to_lowercase());
             for child in children {
@@ -409,11 +675,42 @@ impl App {
         let path=self.default_project.as_ref()?;
         self.projects.iter().position(|p| p.eq_ignore_ascii_case(path))
     }
+    fn can_parent(&self,child:usize,parent:usize)->bool {
+        let (Some(c),Some(p))=(self.tasks.get(child),self.tasks.get(parent)) else{return false};
+        if !c.project.eq_ignore_ascii_case(&p.project){return false;}
+        let mut ancestor=Some(parent);
+        for _ in 0..self.tasks.len() {
+            let Some(id)=ancestor else{return true};
+            if id==child{return false;}
+            ancestor=self.tasks[id].parent.and_then(|p|self.task_row(p));
+        }
+        ancestor.is_none()
+    }
+    fn task_row(&self,id:TaskId)->Option<usize>{
+        self.tasks.iter().position(|t|t.id==id)
+    }
+    fn notification_row(&self,key:&str)->Option<usize>{
+        self.tasks.iter().position(|t| !key.is_empty() &&
+            (t.history_key==key || t.other_sessions.iter().any(|s|s.history_key==key)))
+    }
+    fn set_parent(&mut self,child:usize,parent:Option<usize>)->Result<()> {
+        if child>=self.tasks.len() || parent.is_some_and(|p|!self.can_parent(child,p)){
+            return Err("同じプロジェクト内で、自分とその子孫以外のタスクを選んでください".into());
+        }
+        self.tasks[child].parent=parent.map(|p|self.tasks[p].id);
+        Ok(())
+    }
+    fn remove_task_row(&mut self,index:usize){
+        let removed=self.tasks.remove(index);
+        for task in &mut self.tasks {
+            if task.parent==Some(removed.id){task.parent=removed.parent;}
+        }
+    }
     fn delete_task(&mut self, index: usize) -> Result<()> {
         let visible = self.indices();
         let position = visible.iter().position(|&i| i == index).ok_or("表示中のタスクを選んでください")?;
         let mut next = self.clone();
-        next.tasks.remove(index);
+        next.remove_task_row(index);
         next.task = match self.task {
             Some(i) if i != index => Some(if i > index { i - 1 } else { i }),
             _ => {
@@ -467,6 +764,7 @@ impl App {
             .filter(|&i| {
                 self.query.is_empty() || self.tasks[i].title.to_lowercase().contains(&self.query)
             })
+            .filter(|&i| self.queue_filter == QueueFilter::All || ask::queue_filter(&self.tasks[i]) == self.queue_filter)
             .collect()
     }
 }
@@ -749,7 +1047,10 @@ fn preview(h: H, a: &App) {
     display_document(h, doc_path(a.document_root().unwrap_or(""), &s));
 }
 fn display_document(h: H, path: Result<PathBuf>) {
-    let result: Result<markdown_preview::Preview> = (|| {
+    display_document_at_line(h,path,None);
+}
+fn display_document_at_line(h:H,path:Result<PathBuf>,line:Option<usize>){
+    let result: Result<()> = (|| {
         let path = path?;
         let f = fs::File::open(path).map_err(|e| e.to_string())?;
         let mut body = String::new();
@@ -759,12 +1060,19 @@ fn display_document(h: H, path: Result<PathBuf>) {
         if body.len() > 512 * 1024 {
             return Err("文書の表示上限は512 KiBです".into());
         }
-        Ok(markdown_preview::Preview::document(&body,native::document_width(h,120)))
+        let preview=markdown_preview::Preview::document(&body,native::document_width(h,120));
+        preview.show(h,120);preview.populate_contents(h);
+        if let Some(line)=line.filter(|line|*line>0){
+            let mut start=0;
+            for (i,text) in body.lines().enumerate(){
+                let end=start+text.encode_utf16().count() as i32;
+                if i==line-1 {markdown_preview::Preview::select_source_line(h,120,&body,start,end);break;}
+                start=end+1;
+            }
+        }
+        Ok(())
     })();
-    match result {
-        Ok(preview) => { preview.show(h, 120); preview.populate_contents(h); },
-        Err(e) => set(h, 120, &e),
-    }
+    if let Err(e)=result{set(h,120,&e);}
 }
 fn run(h: H, a: &mut App, id: i32, event: usize) -> Result<()> {
     match (id, event) {
@@ -868,6 +1176,7 @@ fn run(h: H, a: &mut App, id: i32, event: usize) -> Result<()> {
             a.metric = 0;
             msg(h, 125, 0x14e, 0, 0);
             a.agent_filter = 0;
+            a.queue_filter = QueueFilter::All;
             a.task = a.indices().first().copied();
             refresh(h, a);
             render(h, a);
@@ -1013,7 +1322,8 @@ fn register(h: H, a: &mut App, folder: &str) -> Result<()> {
     if !p.is_dir() {
         return Err("フォルダーを選択してください".into());
     }
-    let s = project_root(p.to_str().ok_or("パス変換エラー")?).to_owned();
+    let current = migrated_path(&p);
+    let s = project_root(current.to_str().ok_or("パス変換エラー")?).to_owned();
     if !a.projects.contains(&s) {
         a.projects.push(s.clone())
     }
@@ -1183,8 +1493,74 @@ fn main() {
     }
 }
 #[cfg(test)]
+mod task_id_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn chromarch_migration_resolves_explorer_documents_and_execution() {
+        let fixture = std::env::temp_dir().join(format!("kagari-b6-{}",std::process::id()));
+        let company = fixture.join(".company");
+        let current = company.join(r"dots\game_creator\TurfWars");
+        fs::create_dir_all(current.join("ProjectSettings")).unwrap();
+        fs::write(current.join("ProjectSettings/ProjectSettings.asset"), "").unwrap();
+        fs::write(current.join("status.md"), "B6").unwrap();
+        let root = current.canonicalize().unwrap();
+        for old in [r"game_creator\TurfWars", "chromarch", "TurfWars"] {
+            let old = company.join(old);
+            let mut app = App::default();
+            app.projects.push(old.display().to_string());
+            app.tasks.push(Task {project: old.display().to_string(), cwd: company.display().to_string(),
+                docs: [old.join("status.md").display().to_string(),String::new(),String::new()], ..Default::default()});
+            app.progress_history.push(ProgressPoint{project:old.display().to_string(),millis:1,counts:[1,0,0,0]});
+            app.resolve_migrated_paths();
+            assert_eq!(app.progress_history[0].project,app.projects[0].to_lowercase());
+            assert!(app.progress_changes().is_empty());
+            assert_eq!(Path::new(&app.projects[0]),root);
+            assert_eq!(project_alias(&root),Some("chromarch"));
+            let task = &app.tasks[0];
+            assert_eq!(doc_path(&task.project,&task.docs[0]).unwrap(),root.join("status.md"));
+            assert_eq!(reply_links::resolve(task,old.join("status.md").to_str().unwrap()).unwrap(),root.join("status.md"));
+            for agent in 0..2 {assert_eq!(ask::execution_dir(task,agent),root);}
+        }
+        let other=company.join("other/TurfWars");
+        assert_eq!(migrated_path(&other),other);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+    #[test]
+    fn migrated_projects_keep_their_own_tasks() {
+        let company = Path::new(r"D:\.company");
+        for &(alias, relative, _) in MIGRATED_PROJECTS {
+            let root = company.join(relative);
+            assert_eq!(project_alias(&root), Some(alias));
+            let nested = root.join("docs");
+            assert_eq!(Path::new(project_root(nested.to_str().unwrap())), root);
+        }
+        assert_eq!(project_alias(&company.join(r"dots\transfer\chromarch-github-upload")), None);
+    }
+    #[test]
+    fn grouping_folders_list_their_nested_projects_only() {
+        let fixture = std::env::temp_dir().join(format!("kagari-groups-{}",std::process::id()));
+        let company = fixture.join(".company");
+        fs::create_dir_all(company.join(r"kasane\shirube")).unwrap();
+        fs::write(company.join(r"kasane\shirube\package.json"), "{}").unwrap();
+        fs::create_dir_all(company.join(r"os\shiranui")).unwrap();
+        fs::write(company.join(r"os\shiranui\CLAUDE.md"), "").unwrap();
+        fs::create_dir_all(company.join("eda")).unwrap();
+        assert!(is_project_group(&company, "kasane"));
+        assert!(is_project_group(&company, "OS"));
+        assert!(!is_project_group(&company, "eda"));
+        assert!(!is_project_group(&company, "dots"));
+        let mut app = App::default();
+        app.projects.push(company.join("eda").display().to_string());
+        app.discover_departments();
+        let leafs: Vec<String> = app.projects.iter().map(|p| Path::new(p).strip_prefix(company.canonicalize().unwrap()).or_else(|_| Path::new(p).strip_prefix(&company)).map(|r| r.display().to_string()).unwrap_or_default()).collect();
+        assert!(leafs.iter().any(|p| p.eq_ignore_ascii_case(r"kasane\shirube")), "{leafs:?}");
+        assert!(leafs.iter().any(|p| p.eq_ignore_ascii_case(r"os\shiranui")), "{leafs:?}");
+        assert!(!leafs.iter().any(|p| p.eq_ignore_ascii_case("kasane") || p.eq_ignore_ascii_case("os")), "{leafs:?}");
+        assert_eq!(Path::new(project_root(company.join(r"os\shiranui\review\prompt.md").to_str().unwrap())), company.join(r"os\shiranui"));
+        fs::remove_dir_all(fixture).unwrap();
+    }
     #[test]
     fn company_includes_own_tasks_and_descendant_projects() {
         let mut app = App::default();
@@ -1195,6 +1571,21 @@ mod tests {
         assert_eq!(app.document_root().unwrap(),app.projects[2]);
         app.project=1;
         assert_eq!(app.scope(),vec![1]);
+    }
+    #[test]
+    fn task_hierarchy_survives_deleting_an_intermediate_row() {
+        let mut a=App::default();
+        a.tasks=["a","a","a","a","b"].map(|p|Task{project:p.into(),..Default::default()}).to_vec();
+        a.set_parent(0,Some(3)).unwrap();
+        a.set_parent(1,Some(0)).unwrap();
+        a.set_parent(2,Some(1)).unwrap();
+        assert!(a.set_parent(3,Some(2)).is_err());
+        assert!(a.set_parent(0,Some(4)).is_err());
+        assert!(a.set_parent(0,Some(0)).is_err());
+        a.remove_task_row(0);
+        assert_eq!(a.tasks.iter().map(|t|t.parent).collect::<Vec<_>>(),[Some(a.tasks[2].id),Some(a.tasks[0].id),None,None]);
+        a.set_parent(1,None).unwrap();
+        assert!(a.tasks[1].parent.is_none());
     }
     #[test]
     fn dates() {
@@ -1213,6 +1604,7 @@ mod tests {
         assert!(doc_path("D:\\work", "../private.md").is_err());
     }
 }
+mod task_counts;
 #[cfg(not(test))]
 mod bridge;
 #[cfg(test)]

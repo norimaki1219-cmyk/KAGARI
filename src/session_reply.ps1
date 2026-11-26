@@ -15,7 +15,9 @@ if($codex){
 $file=Get-ChildItem -LiteralPath $folder -Filter $pattern -File -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
 if(!$file){return}
 $reply='';$previous='';$stamp=0
-foreach($line in [IO.File]::ReadLines($file.FullName)){
+$stream=[IO.File]::Open($file.FullName,'Open','Read',([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+$reader=[IO.StreamReader]::new($stream)
+try{while($null -ne ($line=$reader.ReadLine())){
  if($line -notmatch '"(assistant|agent_message|task_complete)"'){continue}
  try{$r=$line | ConvertFrom-Json -ErrorAction Stop}catch{continue}
  $body=$null
@@ -33,4 +35,5 @@ foreach($line in [IO.File]::ReadLines($file.FullName)){
  $reply=$body
  try{$stamp=([DateTimeOffset]::Parse([string]$r.timestamp)).ToUnixTimeMilliseconds()}catch{$stamp=0}
 }
+}finally{$reader.Dispose()}
 if($reply){[Console]::Write(("{0}`n{1}{2}{3}" -f $stamp,$reply.Replace([string][char]0,''),[char]0,$previous.Replace([string][char]0,'')))}

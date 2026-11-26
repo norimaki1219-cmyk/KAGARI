@@ -52,7 +52,7 @@ impl Preview {
                         if !body.is_empty() {
                             self.rtf.push('{');
                             self.rtf.push_str(format);
-                            self.text(body);
+                            if marker=="`"{self.text(body);}else{self.inline(body);}
                             self.rtf.push('}');
                             s = tail;
                             matched = true;
@@ -150,6 +150,10 @@ impl Preview {
     }
 
     pub fn document(s: &str, width: i32) -> Self {
+        Self::document_with_checks(s, width, "")
+    }
+
+    pub(super) fn document_with_checks(s: &str, width: i32, marker: &str) -> Self {
         let mut out = Self::default();
         out.rtf.push_str(r"{\rtf1\ansi\uc1\deff0{\fonttbl{\f0 Yu Gothic UI;}{\f1 Consolas;}}{\colortbl;\red16\green100\blue117;\red182\green205\blue210;\red226\green241\blue243;}\f0\fs24 ");
         let mut fenced = None;
@@ -214,14 +218,20 @@ impl Preview {
                 .or_else(|| trim.strip_prefix("+ "))
             {
                 out.text(&line[..line.len() - trim.len()]);
-                let (bullet, body) = if let Some(body) = body.strip_prefix("[x] ") {
+                let (bullet, body) = if let Some(body) = body.strip_prefix("[x] ").or_else(|| body.strip_prefix("[X] ")) {
                     ("☑ ", body)
                 } else if let Some(body) = body.strip_prefix("[ ] ") {
                     ("□ ", body)
                 } else {
                     ("• ", body)
                 };
-                out.text(bullet);
+                if !marker.is_empty() && bullet != "• " {
+                    // The byte between the brackets is the only byte changed on click.
+                    let offset = trim.as_ptr() as usize - s.as_ptr() as usize + 3;
+                    out.text(&format!("{marker}{offset}:"));
+                } else {
+                    out.text(bullet);
+                }
                 out.inline(body);
             } else if let Some(body) = trim.strip_prefix("> ") {
                 out.rtf.push_str(r"\cf1\i ");
@@ -233,8 +243,11 @@ impl Preview {
             out.rtf.push('}');
         }
         out.rtf.push('}');
+        let explicit_links = out.links.len();
         reply_links::links(&out.visible, |start, end, target| {
-            out.links.push((start, end, target.to_owned()))
+            if !out.links[..explicit_links].iter().any(|(a,b,_)| start < *b && *a < end) {
+                out.links.push((start, end, target.to_owned()));
+            }
         });
         out
     }
@@ -280,6 +293,33 @@ impl Preview {
         }
         reply_links::style_ranges(h, id, &self.links);
         self.links
+    }
+
+    pub fn select_source_line(h:H,id:i32,source:&str,start:i32,end:i32){
+        let normalized=source.replace("\r\n","\n").replace('\r',"\n");
+        let units:Vec<u16>=normalized.encode_utf16().collect();
+        if start<0 || end<=start || end as usize>units.len(){return;}
+        let before=String::from_utf16_lossy(&units[..start as usize]);
+        let through=String::from_utf16_lossy(&units[..end as usize]);
+        let width=native::document_width(h,id);
+        let prior=Self::document(before.trim_end_matches('\n'),width);
+        let current=Self::document(&through,width);
+        let previous=prior.visible.trim_end_matches('\n');
+        let selected=current.visible.strip_prefix(previous).unwrap_or(&current.visible);
+        let mut cursor=0;
+        let mut first=None;
+        for (part,select) in [(previous,false),(selected,true)]{
+            for text in part.lines().map(str::trim).filter(|s|!s.is_empty()){
+                let needle=wide(text);
+                let mut hit=Find{from:cursor,to:-1,needle:needle.as_ptr(),start:0,end:0};
+                if msg(h,id,0x47c,1,&mut hit as *mut _ as isize)>=0{
+                    cursor=hit.end;if select{first.get_or_insert(hit.start);}
+                }
+            }
+        }
+        if let Some(start)=first{
+            msg(h,id,0xb1,start as usize,cursor as isize);msg(h,id,0xb7,0,0);
+        }
     }
 
     pub fn populate_contents(&self, h: H) {
@@ -352,5 +392,31 @@ impl Preview {
         let rtf = std::ffi::CString::new(self.rtf.as_str()).unwrap();
         let params = [0u32, 1252];
         msg(h, id, 0x461, params.as_ptr() as usize, rtf.as_ptr() as _);
+    }
+}
+
+#[cfg(test)]
+mod answer_link_tests {
+    use super::*;
+    #[test]
+    fn links_bare_url_in_japanese_reply_after_table() {
+        let url = "https://eda.eda-edamap.workers.dev";
+        let answer = format!("| A | B |\n|---|---|\n| 1 | 2 |\n\n- 利用者：本番 {url} で、ログインしてください。");
+        let p = Preview::document(&answer, 6000);
+        let start = p.visible.split_once(url).unwrap().0.encode_utf16().count() as i32;
+        assert_eq!(p.links, vec![(start,start+url.len() as i32,url.to_owned())]);
+        let p = Preview::document("（https://example.org/a(b)?q=1&k=2）。",6000);
+        assert_eq!(p.links[0].2,"https://example.org/a(b)?q=1&k=2");
+        let p = Preview::document("[https://example.org](https://example.org/actual)",6000);
+        assert_eq!(p.links.len(),1);
+        assert_eq!(p.links[0].2,"https://example.org/actual");
+    }
+    #[test]
+    fn renders_slack_and_numbered_document_links_as_clickable_labels() {
+        let url="https://example.slack.com/archives/C123/p456";
+        let p=Preview::document(&format!("🙂 **[受領返信]({url})**・[記録](D:/work/CLAUDE.md:214)"),6000);
+        assert_eq!(p.visible,"🙂 受領返信・記録");
+        assert_eq!(p.links,vec![(3,7,url.to_owned()),(8,10,"D:/work/CLAUDE.md:214".to_owned())]);
+        assert!(Preview::document("[無効](file:///example.exe)",6000).links.is_empty());
     }
 }

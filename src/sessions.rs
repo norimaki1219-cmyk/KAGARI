@@ -28,6 +28,15 @@ pub(super) fn latest_reply(agent: usize, session: &str) -> Option<Reply> {
     Some(Reply{time:stamp.trim().parse().ok()?,text:text.into(),previous:previous.into()})
 }
 fn scan(project: &str) -> Result<Vec<Entry>> {
+    let root = Path::new(project);
+    let mut former = Vec::new();
+    if let Some(alias) = project_alias(root) {
+        let company = root.ancestors().find(|p|p.file_name().is_some_and(|n| n.eq_ignore_ascii_case(".company"))).unwrap();
+        let relative = root.strip_prefix(company).unwrap().to_str().unwrap();
+        for path in former_roots(alias,relative) {
+            former.push(company.join(path).to_string_lossy().into_owned());
+        }
+    }
     let shell = PathBuf::from(std::env::var_os("SystemRoot").ok_or("Windowsの場所が不明です")?)
         .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
     let out = Command::new(shell)
@@ -37,6 +46,8 @@ fn scan(project: &str) -> Result<Vec<Entry>> {
             "-Command",
             include_str!("session_list.ps1"),
         ])
+        .env("KAGARI_HISTORY_ALIAS",project_alias(Path::new(project)).unwrap_or(""))
+        .env("KAGARI_HISTORY_FORMER",former.join("\n"))
         .env("KAGARI_HISTORY_PROJECT", project)
         .creation_flags(0x08000000)
         .output()
@@ -74,6 +85,7 @@ struct Picker {
 extern "system" fn dialog(h: H, m: u32, w: usize, l: isize) -> isize {
     unsafe {
         if m == 0x110 {
+        native::round_fields(h);
             SetWindowLongPtrW(h, -21, l);
             let picker = &*(l as *const Picker);
             SetWindowTextW(h, wide(&picker.title).as_ptr());
@@ -149,6 +161,7 @@ extern "system" fn dialog(h: H, m: u32, w: usize, l: isize) -> isize {
 pub fn open(h: H, a: &mut App) -> Result<()> {
     let project = a.root()?.to_owned();
     let name = Path::new(&project).file_name().unwrap_or_default().to_string_lossy();
+    let name = project_alias(Path::new(&project)).unwrap_or(&name);
     let title = format!("{name} のセッション履歴 — KAGARI");
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -233,6 +246,7 @@ fn select(h: H, a: &mut App, root: &str, mut task: Task, ask: bool, handoff: boo
     next.query.clear();
     next.agent_filter = 0;
     next.metric = 0;
+    next.queue_filter = QueueFilter::All;
     next.save()?;
     *a = next;
     set(h, 182, "");

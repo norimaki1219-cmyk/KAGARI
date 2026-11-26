@@ -11,6 +11,17 @@ fn release(path: &Path, prefix: &str) -> Vec<u64> {
         .filter_map(|n| n.parse().ok())
         .collect()
 }
+pub(super) fn standalone_codex() -> Option<PathBuf> {
+    let (package, target) = if cfg!(target_arch = "aarch64") {
+        ("codex-win32-arm64", "aarch64-pc-windows-msvc")
+    } else {
+        ("codex-win32-x64", "x86_64-pc-windows-msvc")
+    };
+    let path = PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
+        .join("RustAIWorkspace/cli/node_modules/@openai").join(package)
+        .join("vendor").join(target).join("bin/codex.exe");
+    path.is_file().then_some(path)
+}
 pub fn find(agent: usize) -> Result<PathBuf> {
     let name = if agent == 0 { "codex" } else { "claude" };
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
@@ -32,12 +43,18 @@ pub fn find(agent: usize) -> Result<PathBuf> {
         for ext in ["exe", "cmd"] {
             let p = dir.join(format!("{name}.{ext}"));
             if p.is_file() {
-                if agent == 0 { return Ok(p); }
+                if agent == 0 {
+                    if p.components().any(|c| c.as_os_str().eq_ignore_ascii_case("WindowsApps")) {
+                        if let Some(cli) = standalone_codex() { return Ok(cli); }
+                    }
+                    return Ok(p);
+                }
                 preferred = Some(p);
                 break 'search;
             }
         }
     }
+    if agent == 0 { if let Some(cli) = standalone_codex() { return Ok(cli); } }
     let mut bundled = Vec::new();
     if let Some(home) = home {
         let prefix = if agent == 0 {

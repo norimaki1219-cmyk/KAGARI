@@ -1,7 +1,7 @@
 use super::*;
 use std::{io::Write, process::Stdio, sync::mpsc};
 
-fn call(config: &Path, post: Option<(&str, &str)>) -> Result<String> {
+fn call(config: &Path, post: Option<(&str, &str, &str)>) -> Result<String> {
     let shell = PathBuf::from(std::env::var_os("SystemRoot").ok_or("Windowsの場所が不明です")?)
         .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
     let mut command = Command::new(shell);
@@ -21,11 +21,11 @@ fn call(config: &Path, post: Option<(&str, &str)>) -> Result<String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    if let Some((channel, _)) = post {
-        command.env("KAGARI_SLACK_CHANNEL", channel);
+    if let Some((channel, _, thread)) = post {
+        command.env("KAGARI_SLACK_CHANNEL", channel).env("KAGARI_SLACK_THREAD",thread);
     }
     let mut child = command.spawn().map_err(|e| e.to_string())?;
-    if let Some((_, text)) = post {
+    if let Some((_, text, _)) = post {
         child
             .stdin
             .take()
@@ -49,6 +49,9 @@ struct Compose {
     config: PathBuf,
     channels: Vec<(String, String)>,
     draft: String,
+    channel:String,
+    thread:String,
+    sent:String,
     pending: Option<mpsc::Receiver<Result<String>>>,
 }
 #[link(name = "user32")]
@@ -62,7 +65,7 @@ impl Compose {
     fn controls(&self, h: H, busy: bool) {
         let selected = msg(h, 651, 0x147, 0, 0);
         unsafe {
-            for id in [651, 652, 2] {
+            for id in [651, 652, 655, 2] {
                 EnableWindow(GetDlgItem(h, id), (!busy) as i32);
             }
             EnableWindow(
@@ -74,6 +77,7 @@ impl Compose {
 }
 extern "system" fn dialog(h: H, m: u32, w: usize, l: isize) -> isize {
     if m == 0x110 {
+        native::round_fields(h);
         unsafe {
             SetWindowLongPtrW(h, -21, l);
         }
@@ -88,6 +92,8 @@ extern "system" fn dialog(h: H, m: u32, w: usize, l: isize) -> isize {
             );
         }
         msg(h, 652, 0xc5, 40000, 0);
+        if let Some(i)=s.channels.iter().position(|(id,_)| id==&s.channel){msg(h,651,0x14e,i,0);}
+        set(h,655,&s.thread);
         set(h, 652, &s.draft);
         s.controls(h, false);
         return 1;
@@ -119,7 +125,8 @@ extern "system" fn dialog(h: H, m: u32, w: usize, l: isize) -> isize {
         }
         s.pending = None;
         match result {
-            Ok(_) => unsafe {
+            Ok(link) => unsafe {
+                s.sent=link;
                 EndDialog(h, 1);
             },
             Err(e) => {
@@ -147,13 +154,14 @@ extern "system" fn dialog(h: H, m: u32, w: usize, l: isize) -> isize {
         if s.pending.is_some() || text.trim().is_empty() {
             return 1;
         }
+        let thread=get(h,655);
         let (channel, config) = (channel.clone(), s.config.clone());
         let (tx, rx) = mpsc::channel();
         s.pending = Some(rx);
         s.controls(h, true);
         set(h, 654, "送信中…");
         std::thread::spawn(move || {
-            let _ = tx.send(call(&config, Some((&channel, &text))));
+            let _ = tx.send(call(&config, Some((&channel, &text, thread.trim()))));
         });
         unsafe {
             SetTimer(h, 1, 150, 0);
@@ -162,7 +170,15 @@ extern "system" fn dialog(h: H, m: u32, w: usize, l: isize) -> isize {
     }
     0
 }
-pub fn open(owner: H, draft: &str) -> Result<()> {
+fn proposal(reply:&str)->Option<(&str,&str,&str)> {
+    let (_,rest)=reply.split_once("```kagari-slack\n")?;
+    let (block,_)=rest.split_once("\n```")?;
+    let (channel,rest)=block.split_once('\n')?;
+    let (thread,body)=rest.split_once('\n')?;
+    if channel.trim().is_empty() || body.trim().is_empty(){return None;}
+    Some((channel.trim(),if thread.trim()=="-"{""}else{thread.trim()},body))
+}
+pub fn open(owner: H, draft: &str, full:&str) -> Result<()> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let root = exe
         .ancestors()
@@ -171,7 +187,12 @@ pub fn open(owner: H, draft: &str) -> Result<()> {
                 .is_some_and(|s| s.eq_ignore_ascii_case(".company"))
         })
         .ok_or("slack_bot の設定が見つかりません")?;
-    let config = root.join("slack_bot/config.json");
+    // 2026-11-26: slack_bot moved under os\ (D:\.company\CLAUDE.md); the old place is kept as a fallback.
+    let config = [r"os\slack_bot\config.json", r"slack_bot\config.json"]
+        .iter()
+        .map(|p| root.join(p))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| root.join(r"os\slack_bot\config.json"));
     let rows = call(&config, None)?;
     let channels: Vec<_> = rows
         .lines()
@@ -181,10 +202,13 @@ pub fn open(owner: H, draft: &str) -> Result<()> {
     if channels.is_empty() {
         return Err("slack_bot に送信先チャンネルが登録されていません。".into());
     }
+    let normalized=full.replace("\r\n","\n");
+    let (channel,thread,body)=proposal(&normalized).unwrap_or(("","",draft));
     let mut state = Compose {
         config,
         channels,
-        draft: draft.into(),
+        draft:body.replace("\r\n","\n").replace('\n',"\r\n"),
+        channel:channel.into(),thread:thread.into(),sent:String::new(),
         pending: None,
     };
     let n = unsafe {
@@ -200,7 +224,19 @@ pub fn open(owner: H, draft: &str) -> Result<()> {
         return Err("Slack投稿画面を開けません".into());
     }
     if n == 1 {
-        notice(owner, "Slackに投稿しました。");
+        notice(owner,&format!("Slackに投稿しました。\n{}",state.sent));
     }
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::proposal;
+    #[test]
+    fn extracts_only_reviewed_slack_fields() {
+        let reply = "投稿案\n```kagari-slack\nC123\n1234567890.000001\n<@U123> 公開しました。\n続き\n```\n補足";
+        assert_eq!(proposal(reply),Some(("C123","1234567890.000001","<@U123> 公開しました。\n続き")));
+        assert_eq!(proposal("```kagari-slack\nC123\n-\n新規\n```"),Some(("C123","","新規")));
+        assert_eq!(proposal("過去の回答"),None);
+        assert_eq!(proposal("```kagari-slack\nC123\n-\n\n```"),None);
+    }
 }

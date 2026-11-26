@@ -123,6 +123,63 @@ extern "system" {
     fn SetTextColor(dc: H, c: u32) -> u32;
     fn SetBkMode(dc: H, mode: i32) -> i32;
 }
+pub(super) struct DecisionFont(H);
+impl Drop for DecisionFont {
+    fn drop(&mut self){unsafe{DeleteObject(self.0);}}
+}
+pub(super) fn decision_font(dialog:H)->Option<DecisionFont>{
+    #[link(name="user32")]
+    extern "system"{fn GetDpiForWindow(h:H)->u32;}
+    let dpi=unsafe{GetDpiForWindow(dialog)}.max(96) as i32;
+    let font=unsafe{CreateFontW(-((14*dpi+36)/72),0,0,0,400,0,0,0,1,0,0,5,0,wide("Yu Gothic UI").as_ptr())};
+    if font==0{return None;}
+    for id in [403,421,439,681,683,684,685,686]{msg(dialog,id,0x30,font as usize,1);}
+    for id in [681,683]{msg(dialog,id,0x1a0,0,((28*dpi+48)/96) as isize);}
+    Some(DecisionFont(font))
+}
+pub(super) fn fit_list_width<'a>(dialog:H,id:i32,items:impl Iterator<Item=&'a str>){
+    #[link(name="user32")]
+    extern "system"{fn GetDC(h:H)->H;fn ReleaseDC(h:H,dc:H)->i32;}
+    #[link(name="gdi32")]
+    extern "system"{fn GetTextExtentPoint32W(dc:H,text:Ptr,len:i32,size:*mut [i32;2])->i32;}
+    unsafe{
+        let list=GetDlgItem(dialog,id);
+        let dc=GetDC(list);
+        if dc==0{return;}
+        let old=SelectObject(dc,msg(dialog,id,0x31,0,0));
+        let mut width=0;
+        for item in items{
+            let text=wide(item);
+            let mut size=[0;2];
+            if GetTextExtentPoint32W(dc,text.as_ptr(),(text.len()-1) as i32,&mut size)!=0{width=width.max(size[0]+8);}
+        }
+        SelectObject(dc,old);ReleaseDC(list,dc);
+        msg(dialog,id,0x194,width as usize,0);
+    }
+}
+pub(super) fn draw_choice(h:H,l:isize){
+    #[link(name="user32")]
+    extern "system"{fn GetSysColorBrush(index:i32)->H; fn GetSysColor(index:i32)->u32;}
+    let d=unsafe{&*(l as *const Draw)};
+    let selected=d.state & 1 != 0;
+    unsafe {
+        FillRect(d.dc,&d.rect,GetSysColorBrush(if selected {13}else{5}));
+        if d.index!=u32::MAX {
+            let index=d.index as usize;
+            let len=msg(h,683,0x18a,index,0);
+            if len>=0 {
+                let mut text=vec![0u16;len as usize+1];
+                msg(h,683,0x189,index,text.as_mut_ptr() as isize);
+                let mut rect=d.rect;
+                rect.x+=3;
+                SetBkMode(d.dc,1);
+                SetTextColor(d.dc,GetSysColor(if selected {14}else{8}));
+                DrawTextW(d.dc,text.as_ptr(),len as i32,&mut rect,0x800);
+            }
+        }
+        if d.state & 16 != 0 {DrawFocusRect(d.dc,&d.rect);}
+    }
+}
 pub fn init(h: H) {
     unsafe {
         let tip = CreateWindowExW(
@@ -265,7 +322,7 @@ pub fn task_caption(h: H, dc: usize, hwnd: H) -> H {
         let status=get(h,433);
         let (ink,fill)=if status.starts_with("実行中"){(0x745211,0xf5eee0)}
             else if status.starts_with("回答受信"){(0x3e5920,0xe6f2e1)}
-            else if status=="依頼待ち"{(0x505a54,0xeaf0ed)}
+            else if status=="未依頼"{(0x505a54,0xeaf0ed)}
             else{(0x1f3d80,0xdbebfa)};
         #[link(name="gdi32")]
         extern "system"{fn SetDCBrushColor(dc:H,c:u32)->u32;fn GetStockObject(id:i32)->H;fn SetBkColor(dc:H,c:u32)->u32;}
@@ -286,7 +343,7 @@ pub fn task_caption(h: H, dc: usize, hwnd: H) -> H {
 pub fn legend(dc: usize, hwnd: H) -> H {
     let brush = native::background(dc);
     let id = unsafe { GetDlgCtrlID(hwnd) };
-    if (170..174).contains(&id) {
+    if (170..=174).contains(&id) {
         unsafe {
             SetTextColor(dc as H, chart::COLORS[(id - 170) as usize]);
         }

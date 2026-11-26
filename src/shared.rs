@@ -80,6 +80,7 @@ fn sync(h: H) {
 extern "system" fn view(h: H, m: u32, w: usize, _: isize) -> isize {
     match m {
         0x110 => {
+        native::round_fields(h);
             KEY.with(|k| set(h, 201, &k.borrow()));
             LAST.with(|v| set(h, 203, &v.borrow()));
             if JOB.with(|j| j.borrow().is_some()) {
